@@ -7,6 +7,7 @@
 import type { CliRenderer } from "@opentui/core"
 import {
     BoxRenderable, TextRenderable, ScrollBoxRenderable,
+    CliRenderEvents,
     t, bold, italic, fg,
 } from "@opentui/core"
 import { theme, truncate, progressBar, progressColor, formatDuration, getActiveTheme, setActiveTheme, getTheme } from "../utils/theme"
@@ -66,6 +67,7 @@ export class ReaderView {
     private bookmarksPanel: BookmarksPanel | null = null
     private dictionaryModal: DictionaryModal | null = null
     private modalOpen = false
+    private lastSelectedText = ""
 
     constructor(renderer: CliRenderer, app: App) {
         this.renderer = renderer
@@ -224,6 +226,21 @@ export class ReaderView {
         this.renderer.root.add(this.statusBar.root)
 
         this.readingPane.focus()
+
+        // Phase 4: Listen for text selection events
+        this.renderer.on(CliRenderEvents.SELECTION, () => {
+            const sel = this.renderer.getSelection()
+            if (sel) {
+                const text = sel.getSelectedText()?.trim()
+                if (text && text.length > 0) {
+                    this.lastSelectedText = text
+                    // Show hint only for short selections (likely words)
+                    if (text.length < 40) {
+                        showToast(this.renderer, `Selected: "${text.slice(0, 20)}" — press D for dictionary`, "info")
+                    }
+                }
+            }
+        })
     }
 
     // ── Sidebar ─────────────────────────────────────────────────
@@ -634,10 +651,13 @@ export class ReaderView {
                     this.showHelp()
                     return true
 
-                // Phase 4: Dictionary lookup
-                case "D":
-                    this.showDictionary()
+                // Phase 4: Dictionary lookup (uses selected text if any)
+                case "D": {
+                    const sel = this.renderer.getSelection()
+                    const selectedWord = sel?.getSelectedText()?.trim() || this.lastSelectedText
+                    this.showDictionary(selectedWord || undefined)
                     return true
+                }
 
                 // Phase 4: Export to Obsidian/Logseq
                 case "E":
