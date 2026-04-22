@@ -66,6 +66,8 @@ export class HelpOverlay {
                     ["B", "View bookmarks"],
                     ["t", "Chapter list (TOC)"],
                     ["/", "Search in book"],
+                    ["D", "Dictionary lookup"],
+                    ["E", "Export to Obsidian/Logseq"],
                     ["q", "Back to library"],
                 ],
             },

@@ -29,6 +29,12 @@ A premium **Terminal Book Reader** built with [OpenTUI](https://opentui.com) —
 - **Help Overlay** — `?` for complete keybind reference
 - **Book Deletion** — `d` to remove books from library
 
+### 🧰 Advanced
+- **Obsidian/Logseq Export** — `E` exports notes & bookmarks as markdown with YAML frontmatter
+- **Dictionary Lookup** — `D` to look up word definitions via free API
+- **Persistent Config** — Theme, zoom, scroll speed, export format saved to `~/.tbook/config.json`
+- **Session Persistence** — All preferences survive between sessions
+
 ### 📊 Statistics
 - **Reading Stats Dashboard** — Daily word count bar charts
 - **Session Tracking** — Words read + minutes recorded per session
@@ -68,6 +74,8 @@ brew install poppler
 | `/` | Search in book |
 | `b` | Add bookmark |
 | `B` | View bookmarks |
+| `D` | Dictionary lookup |
+| `E` | Export to Obsidian/Logseq |
 | `Tab` | Toggle chapter sidebar |
 | `?` | Help overlay |
 | `q` | Back to library |
@@ -101,11 +109,15 @@ src/
 │   ├── help-overlay.ts     # Full keybind reference modal
 │   ├── chapter-toc.ts      # Chapter navigation modal
 │   ├── search-modal.ts     # Full-text search with results
-│   └── bookmarks-panel.ts  # Bookmark viewer & manager
+│   ├── bookmarks-panel.ts  # Bookmark viewer & manager
+│   └── dictionary-modal.ts # Word definition lookup
 ├── services/
 │   ├── database.ts         # SQLite via bun:sqlite
 │   ├── epub-parser.ts      # EPUB → structured chapters
-│   └── pdf-parser.ts       # PDF → chapters via pdftotext
+│   ├── pdf-parser.ts       # PDF → chapters via pdftotext
+│   ├── export.ts           # Obsidian/Logseq markdown export
+│   ├── config.ts           # User config persistence
+│   └── dictionary.ts       # Free dictionary API client
 └── utils/
     ├── theme.ts            # Tokyo Night Book dual-theme system
     └── html-to-text.ts     # HTML → styled terminal text
@@ -115,6 +127,7 @@ src/
 
 All data is stored in `~/.tbook/`:
 - `tbook.db` — SQLite database (books, bookmarks, reading stats)
+- `config.json` — User preferences (theme, zoom, export format)
 
 ## 📄 License
 

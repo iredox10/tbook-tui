@@ -1,6 +1,7 @@
 // ─────────────────────────────────────────────────────────────
 // Reader View — the main reading experience
-// Phase 2: zoom, auto-scroll, reading stats, theme toggle, PDF
+// Phase 2-4: zoom, auto-scroll, stats, theme, PDF, modals,
+//            export, dictionary, config, mouse
 // ─────────────────────────────────────────────────────────────
 
 import type { CliRenderer } from "@opentui/core"
@@ -18,6 +19,9 @@ import { HelpOverlay } from "../components/help-overlay"
 import { ChapterTocModal } from "../components/chapter-toc"
 import { SearchModal } from "../components/search-modal"
 import { BookmarksPanel } from "../components/bookmarks-panel"
+import { DictionaryModal } from "../components/dictionary-modal"
+import { exportBook } from "../services/export"
+import { loadConfig, updateConfig } from "../services/config"
 import type { App } from "../app"
 
 // Zoom levels: padding on each side of the reading pane
@@ -60,6 +64,7 @@ export class ReaderView {
     private tocModal: ChapterTocModal | null = null
     private searchModal: SearchModal | null = null
     private bookmarksPanel: BookmarksPanel | null = null
+    private dictionaryModal: DictionaryModal | null = null
     private modalOpen = false
 
     constructor(renderer: CliRenderer, app: App) {
@@ -78,6 +83,15 @@ export class ReaderView {
         this.book = book
         this.currentChapter = book.current_chapter
         this.readStartTime = Date.now()
+
+        // Phase 4: Apply saved config preferences
+        const config = loadConfig()
+        this.zoomIndex = config.defaultZoom
+        this.autoScrollSpeedIndex = config.autoScrollSpeed
+        this.sidebarVisible = config.sidebarVisible
+        if (config.theme !== getActiveTheme()) {
+            setActiveTheme(config.theme)
+        }
         this.wordsReadThisSession = 0
 
         // Show loading spinner
@@ -473,6 +487,9 @@ export class ReaderView {
         // Re-render chapter content with new colors
         this.renderChapter()
 
+        // Phase 4: Persist theme to config
+        updateConfig("theme", next)
+
         showToast(this.renderer, `🎨 Theme: ${next === "dark" ? "Dark 🌙" : "Light ☀️"}`, "info")
     }
 
@@ -577,6 +594,16 @@ export class ReaderView {
                     this.showHelp()
                     return true
 
+                // Phase 4: Dictionary lookup
+                case "D":
+                    this.showDictionary()
+                    return true
+
+                // Phase 4: Export to Obsidian/Logseq
+                case "E":
+                    this.exportToMarkdown()
+                    return true
+
                 // Sidebar toggle
                 case "\t":
                     this.sidebarVisible = !this.sidebarVisible
@@ -655,6 +682,31 @@ export class ReaderView {
         this.bookmarksPanel.show()
     }
 
+    // ── Phase 4 Features ────────────────────────────────────────
+
+    private showDictionary(word?: string) {
+        this.modalOpen = true
+        this.dictionaryModal = new DictionaryModal(this.renderer, () => {
+            this.modalOpen = false
+            this.readingPane.focus()
+        })
+        this.dictionaryModal.show(word)
+    }
+
+    private exportToMarkdown() {
+        const config = loadConfig()
+        const result = exportBook(this.book, this.parsedBook, {
+            format: config.exportFormat,
+            outputDir: config.exportDir,
+        })
+
+        if (result.success) {
+            showToast(this.renderer, `📝 Exported to ${result.path}`, "success")
+        } else {
+            showToast(this.renderer, `Export failed: ${result.error}`, "error")
+        }
+    }
+
     // ── Cleanup ─────────────────────────────────────────────────
 
     destroy() {
@@ -664,6 +716,7 @@ export class ReaderView {
         this.tocModal?.destroy()
         this.searchModal?.destroy()
         this.bookmarksPanel?.destroy()
+        this.dictionaryModal?.destroy()
         this.statusBar.destroy()
         try { this.renderer.root.remove(this.container.id) } catch { }
     }
