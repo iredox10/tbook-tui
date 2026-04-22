@@ -1,9 +1,12 @@
 // ─────────────────────────────────────────────────────────────
-// Help Overlay — modal keybind reference
+// Help Overlay — modal keybind reference (scrollable)
 // ─────────────────────────────────────────────────────────────
 
 import type { CliRenderer } from "@opentui/core"
-import { BoxRenderable, TextRenderable, t, bold, fg } from "@opentui/core"
+import {
+    BoxRenderable, TextRenderable, ScrollBoxRenderable,
+    t, bold, fg,
+} from "@opentui/core"
 import { theme } from "../utils/theme"
 
 export class HelpOverlay {
@@ -24,29 +27,49 @@ export class HelpOverlay {
         this.container = new BoxRenderable(this.renderer, {
             id: "help-overlay",
             position: "absolute",
-            top: 2,
-            bottom: 2,
-            left: "15%",
-            right: "15%",
+            top: 1,
+            bottom: 1,
+            left: "10%",
+            right: "10%",
             borderStyle: "rounded",
             borderColor: theme.accent.cyan,
             backgroundColor: theme.bg.card,
             flexDirection: "column",
-            padding: 2,
-            gap: 1,
+            padding: 1,
+            gap: 0,
         })
 
-        // Title
+        // Title (fixed header)
         this.container.add(new TextRenderable(this.renderer, {
             id: "help-title",
-            content: t`${bold(fg(theme.accent.cyan)("⌨  Keyboard Shortcuts"))}`,
+            content: t` ${bold(fg(theme.accent.cyan)("⌨  Keyboard Shortcuts"))}`,
         }))
 
         this.container.add(new TextRenderable(this.renderer, {
             id: "help-sep",
-            content: "━".repeat(40),
+            content: " " + "━".repeat(44),
             fg: theme.border.normal,
         }))
+
+        // Scrollable content area
+        const scrollArea = new ScrollBoxRenderable(this.renderer, {
+            id: "help-scroll",
+            width: "100%",
+            flexGrow: 1,
+            scrollbarOptions: {
+                trackOptions: {
+                    foregroundColor: theme.scrollbar.thumb,
+                    backgroundColor: theme.scrollbar.track,
+                },
+            },
+            contentOptions: {
+                paddingLeft: 1,
+                paddingRight: 1,
+                flexDirection: "column",
+                gap: 0,
+                backgroundColor: theme.bg.card,
+            },
+        })
 
         // Sections
         const sections: { title: string; keys: [string, string][] }[] = [
@@ -87,7 +110,7 @@ export class HelpOverlay {
             {
                 title: "📂 Import",
                 keys: [
-                    ["Enter", "Scan directory / import file"],
+                    ["Enter", "Scan directory / import"],
                     ["a", "Import all found files"],
                     ["j / k", "Navigate files"],
                     ["/", "Edit scan path"],
@@ -104,27 +127,31 @@ export class HelpOverlay {
         ]
 
         for (const section of sections) {
-            this.container.add(new TextRenderable(this.renderer, {
-                id: `help-section-${section.title}`,
+            scrollArea.add(new TextRenderable(this.renderer, {
+                id: `help-s-${section.title.slice(2, 6)}`,
                 content: t`\n${bold(fg(theme.accent.purple)(section.title))}`,
             }))
 
-            for (const [key, desc] of section.keys) {
-                const paddedKey = key.padEnd(18)
-                this.container.add(new TextRenderable(this.renderer, {
-                    id: `help-key-${key.replace(/\s/g, "")}`,
-                    content: t`  ${fg(theme.accent.amber)(paddedKey)} ${fg(theme.text.body)(desc)}`,
+            for (let ki = 0; ki < section.keys.length; ki++) {
+                const [key, desc] = section.keys[ki]!
+                const paddedKey = key!.padEnd(18)
+                scrollArea.add(new TextRenderable(this.renderer, {
+                    id: `help-k-${section.title.slice(2, 5)}-${ki}`,
+                    content: t`  ${fg(theme.accent.amber)(paddedKey)} ${fg(theme.text.body)(desc!)}`,
                 }))
             }
         }
 
-        // Footer hint
+        this.container.add(scrollArea)
+
+        // Footer (fixed)
         this.container.add(new TextRenderable(this.renderer, {
             id: "help-footer",
-            content: t`\n${fg(theme.text.subtle)("Press ? or q or Esc to close")}`,
+            content: t`${fg(theme.text.subtle)(" j/k Scroll · ? or q or Esc to close")}`,
         }))
 
         this.renderer.root.add(this.container)
+        scrollArea.focus()
 
         // Input handler
         this.renderer.addInputHandler((seq: string) => {
@@ -133,7 +160,20 @@ export class HelpOverlay {
                 this.hide()
                 return true
             }
-            return true // consume all input while help is open
+            // Allow j/k scrolling within the help
+            if (seq === "j" || seq === "\x1b[B") {
+                scrollArea.scrollBy(1)
+                return true
+            }
+            if (seq === "k" || seq === "\x1b[A") {
+                scrollArea.scrollBy(-1)
+                return true
+            }
+            if (seq === " ") {
+                scrollArea.scrollBy(1, "viewport")
+                return true
+            }
+            return true // consume all other input while help is open
         })
     }
 

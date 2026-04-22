@@ -293,6 +293,14 @@ export class ReaderView {
         this.readingPane.add(chSep)
         this.chapterTextNodes.push(chSep)
 
+        // Common text properties for readability
+        const textProps = {
+            wrapMode: "word" as const,
+            selectable: true,
+            selectionBg: th.accent.blue,
+            selectionFg: th.bg.void,
+        }
+
         // Content paragraphs
         for (let i = 0; i < chapter.paragraphs.length; i++) {
             const p = chapter.paragraphs[i]!
@@ -302,10 +310,12 @@ export class ReaderView {
                 case "heading":
                     node = new TextRenderable(this.renderer, {
                         id: `para-${i}`,
-                        content: t`\n${bold(fg(
+                        ...textProps,
+                        content: t`\n\n${bold(fg(
                             p.level === 1 ? th.accent.purple :
                                 p.level === 2 ? th.accent.blue :
-                                    th.accent.cyan
+                                    p.level === 3 ? th.accent.cyan :
+                                        th.accent.green
                         )(p.text))}\n`,
                     })
                     break
@@ -313,22 +323,52 @@ export class ReaderView {
                 case "quote":
                     node = new TextRenderable(this.renderer, {
                         id: `para-${i}`,
-                        content: t`\n  ${italic(fg(th.text.muted)(`"${p.text}"`))}`,
+                        ...textProps,
+                        content: t`\n  ${fg(th.accent.cyan)("│")} ${italic(fg(th.text.muted)(p.text))}\n`,
                     })
                     break
 
                 case "separator":
                     node = new TextRenderable(this.renderer, {
                         id: `para-${i}`,
-                        content: `\n${"  ◆  ".padStart(22)}`,
+                        content: `\n${"  ◆  ◆  ◆".padStart(22)}\n`,
                         fg: th.text.subtle,
                     })
                     break
 
-                default:
+                case "list-item": {
+                    const indent = "  ".repeat((p.indent || 0) + 1)
+                    let bullet: string
+                    if (p.ordered) {
+                        bullet = `${p.index}.`
+                    } else {
+                        // Different bullet styles for nesting depth
+                        const bullets = ["•", "◦", "▪", "▸"]
+                        bullet = bullets[Math.min(p.indent || 0, bullets.length - 1)]!
+                    }
                     node = new TextRenderable(this.renderer, {
                         id: `para-${i}`,
-                        content: `\n${p.text}`,
+                        ...textProps,
+                        content: t`${indent}${fg(th.accent.cyan)(bullet)} ${fg(th.text.body)(p.text)}`,
+                    })
+                    break
+                }
+
+                case "code":
+                    node = new TextRenderable(this.renderer, {
+                        id: `para-${i}`,
+                        ...textProps,
+                        content: `\n    ${p.text.split("\n").join("\n    ")}\n`,
+                        fg: th.accent.green,
+                    })
+                    break
+
+                default:
+                    // Regular paragraph — add proper spacing
+                    node = new TextRenderable(this.renderer, {
+                        id: `para-${i}`,
+                        ...textProps,
+                        content: p.text ? `\n${p.text}\n` : "",
                         fg: th.text.body,
                     })
                     break

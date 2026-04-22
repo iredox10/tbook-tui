@@ -346,6 +346,10 @@ export class ImportView {
         if (this.files.length === 0) return
         this.selectedIndex = Math.max(0, Math.min(this.files.length - 1, this.selectedIndex + delta))
         this.renderFileList()
+
+        // Scroll to keep selected item visible (each row is 2 lines tall)
+        const targetLine = this.selectedIndex * 2
+        this.fileList.scrollTo(targetLine)
     }
 
     private async importSelected() {
