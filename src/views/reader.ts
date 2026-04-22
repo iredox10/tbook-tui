@@ -14,6 +14,10 @@ import { parsePdf } from "../services/pdf-parser"
 import { getBookById, updateReadingProgress, addBookmark, recordReading, type BookRecord } from "../services/database"
 import { StatusBar } from "../components/status-bar"
 import { showToast } from "../components/toast"
+import { HelpOverlay } from "../components/help-overlay"
+import { ChapterTocModal } from "../components/chapter-toc"
+import { SearchModal } from "../components/search-modal"
+import { BookmarksPanel } from "../components/bookmarks-panel"
 import type { App } from "../app"
 
 // Zoom levels: padding on each side of the reading pane
@@ -50,6 +54,13 @@ export class ReaderView {
     private readStartTime = 0
     private wordsReadThisSession = 0
     private chapterWordCountCache: Map<number, number> = new Map()
+
+    // Phase 3 modals
+    private helpOverlay: HelpOverlay | null = null
+    private tocModal: ChapterTocModal | null = null
+    private searchModal: SearchModal | null = null
+    private bookmarksPanel: BookmarksPanel | null = null
+    private modalOpen = false
 
     constructor(renderer: CliRenderer, app: App) {
         this.renderer = renderer
@@ -484,6 +495,9 @@ export class ReaderView {
 
     private setupKeybinds() {
         this.renderer.addInputHandler((sequence: string) => {
+            // Block all reader input while a modal is open
+            if (this.modalOpen) return false
+
             switch (sequence) {
                 // Scrolling
                 case "j":
@@ -517,11 +531,11 @@ export class ReaderView {
                 // Zoom
                 case "+":
                 case "=":
-                    this.adjustZoom(1) // wider margins
+                    this.adjustZoom(1)
                     return true
                 case "-":
                 case "_":
-                    this.adjustZoom(-1) // narrower margins
+                    this.adjustZoom(-1)
                     return true
 
                 // Auto-scroll
@@ -537,10 +551,30 @@ export class ReaderView {
                     this.toggleTheme()
                     return true
 
-                // Bookmark
+                // Bookmark (save)
                 case "b":
                     addBookmark(this.book.id, this.currentChapter, this.readingPane.scrollTop, "")
                     showToast(this.renderer, "🔖 Bookmark saved", "success")
+                    return true
+
+                // Phase 3: Bookmarks panel
+                case "B":
+                    this.showBookmarks()
+                    return true
+
+                // Phase 3: Chapter TOC
+                case "t":
+                    this.showToc()
+                    return true
+
+                // Phase 3: Search in book
+                case "/":
+                    this.showSearch()
+                    return true
+
+                // Phase 3: Help overlay
+                case "?":
+                    this.showHelp()
                     return true
 
                 // Sidebar toggle
@@ -560,11 +594,76 @@ export class ReaderView {
         })
     }
 
+    // ── Phase 3 Modal Launchers ──────────────────────────────────
+
+    private showHelp() {
+        this.modalOpen = true
+        this.helpOverlay = new HelpOverlay(this.renderer, () => {
+            this.modalOpen = false
+            this.readingPane.focus()
+        })
+        this.helpOverlay.show()
+    }
+
+    private showToc() {
+        this.modalOpen = true
+        this.tocModal = new ChapterTocModal(
+            this.renderer,
+            (chapterIndex: number) => {
+                this.currentChapter = chapterIndex
+                this.renderChapter()
+            },
+            () => {
+                this.modalOpen = false
+                this.readingPane.focus()
+            },
+        )
+        this.tocModal.show(this.parsedBook.chapters, this.currentChapter)
+    }
+
+    private showSearch() {
+        this.modalOpen = true
+        this.searchModal = new SearchModal(
+            this.renderer,
+            (chapterIndex: number) => {
+                this.currentChapter = chapterIndex
+                this.renderChapter()
+            },
+            () => {
+                this.modalOpen = false
+                this.readingPane.focus()
+            },
+        )
+        this.searchModal.show(this.parsedBook)
+    }
+
+    private showBookmarks() {
+        this.modalOpen = true
+        this.bookmarksPanel = new BookmarksPanel(
+            this.renderer,
+            this.book.id,
+            (chapter: number, scrollPos: number) => {
+                this.currentChapter = chapter
+                this.renderChapter()
+                this.readingPane.scrollTo(scrollPos)
+            },
+            () => {
+                this.modalOpen = false
+                this.readingPane.focus()
+            },
+        )
+        this.bookmarksPanel.show()
+    }
+
     // ── Cleanup ─────────────────────────────────────────────────
 
     destroy() {
         this.recordSessionStats()
         this.stopAutoScroll()
+        this.helpOverlay?.destroy()
+        this.tocModal?.destroy()
+        this.searchModal?.destroy()
+        this.bookmarksPanel?.destroy()
         this.statusBar.destroy()
         try { this.renderer.root.remove(this.container.id) } catch { }
     }

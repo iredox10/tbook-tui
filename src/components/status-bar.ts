@@ -67,10 +67,10 @@ export class StatusBar {
                 this.rightText.content = t`${fg(theme.text.subtle)("↑↓ Select · ⏎ Open · q Quit")}`
                 break
             case "library":
-                this.rightText.content = t`${fg(theme.text.subtle)("↑↓ Navigate · ⏎ Open · i Stats · n Import · / Search · ? Help")}`
+                this.rightText.content = t`${fg(theme.text.subtle)("↑↓ Navigate · ⏎ Open · / Search · n Import · d Delete · ? Help")}`
                 break
             case "reader":
-                this.rightText.content = t`${fg(theme.text.subtle)("j/k Scroll · h/l Chapter · +/- Zoom · a Auto · T Theme · b Bookmark · q Back")}`
+                this.rightText.content = t`${fg(theme.text.subtle)("j/k Scroll · h/l Ch · +/- Zoom · a Auto · t TOC · / Search · B Marks · ? Help")}`
                 break
             case "stats":
                 this.rightText.content = t`${fg(theme.text.subtle)("q Back · ← → Week")}`

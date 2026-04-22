@@ -9,9 +9,10 @@ import {
     t, bold, fg,
 } from "@opentui/core"
 import { theme, progressBar, progressColor, truncate, relativeTime } from "../utils/theme"
-import { getAllBooks, type BookRecord } from "../services/database"
+import { getAllBooks, deleteBook, type BookRecord } from "../services/database"
 import { StatusBar } from "../components/status-bar"
 import { showToast } from "../components/toast"
+import { HelpOverlay } from "../components/help-overlay"
 import type { App } from "../app"
 
 export class LibraryView {
@@ -26,7 +27,8 @@ export class LibraryView {
     private searchMode = false
     private searchInput?: InputRenderable
     private cardRenderables: BoxRenderable[] = []
-
+    private helpOverlay: HelpOverlay | null = null
+    private helpOpen = false
     constructor(renderer: CliRenderer, app: App) {
         this.renderer = renderer
         this.app = app
@@ -178,8 +180,11 @@ export class LibraryView {
                 case "q":
                     this.app.showSplash()
                     return true
+                case "d":
+                    this.deleteSelectedBook()
+                    return true
                 case "?":
-                    showToast(this.renderer, "Help overlay coming soon!", "info")
+                    this.showHelp()
                     return true
             }
             return false
@@ -346,7 +351,30 @@ export class LibraryView {
         this.renderBookCards()
     }
 
+    private deleteSelectedBook() {
+        if (this.filteredBooks.length === 0) return
+        const book = this.filteredBooks[this.selectedIndex]
+        if (!book) return
+        deleteBook(book.id)
+        this.books = getAllBooks()
+        this.filteredBooks = [...this.books]
+        this.selectedIndex = Math.min(this.selectedIndex, this.filteredBooks.length - 1)
+        this.renderBookCards()
+        this.statusBar.setLibraryInfo(this.books.length)
+        showToast(this.renderer, `🗑 Deleted: ${truncate(book.title, 25)}`, "info")
+    }
+
+    private showHelp() {
+        this.helpOpen = true
+        this.helpOverlay = new HelpOverlay(this.renderer, () => {
+            this.helpOpen = false
+            this.bookList.focus()
+        })
+        this.helpOverlay.show()
+    }
+
     destroy() {
+        this.helpOverlay?.destroy()
         this.statusBar.destroy()
         try { this.renderer.root.remove(this.container.id) } catch { }
     }
