@@ -8,7 +8,7 @@ import type { CliRenderer } from "@opentui/core"
 import {
     BoxRenderable, TextRenderable, ScrollBoxRenderable,
     CliRenderEvents,
-    t, bold, italic, fg,
+    t, bold, italic, fg, bg,
 } from "@opentui/core"
 import { theme, truncate, progressBar, progressColor, formatDuration, getActiveTheme, setActiveTheme, getTheme } from "../utils/theme"
 import { parseEpub, type ParsedBook, type Chapter } from "../services/epub-parser"
@@ -68,6 +68,11 @@ export class ReaderView {
     private dictionaryModal: DictionaryModal | null = null
     private modalOpen = false
     private lastSelectedText = ""
+
+    // Inline select mode
+    private selectMode = false
+    private selectParaIdx = 0
+    private selectWordIdx = 0
 
     constructor(renderer: CliRenderer, app: App) {
         this.renderer = renderer
@@ -572,6 +577,45 @@ export class ReaderView {
             // Block all reader input while a modal is open
             if (this.modalOpen) return false
 
+            // ── SELECT MODE input handling ──
+            if (this.selectMode) {
+                switch (sequence) {
+                    case "\x1b": // Escape — exit select mode
+                    case "s":    // toggle off
+                        this.exitSelectMode()
+                        return true
+                    case "j":
+                    case "\x1b[B": // down — next paragraph
+                        this.selectMoveParagraph(1)
+                        return true
+                    case "k":
+                    case "\x1b[A": // up — prev paragraph
+                        this.selectMoveParagraph(-1)
+                        return true
+                    case "l":
+                    case "\x1b[C": // right — next word
+                        this.selectMoveWord(1)
+                        return true
+                    case "h":
+                    case "\x1b[D": // left — prev word
+                        this.selectMoveWord(-1)
+                        return true
+                    case " ": // space — advance word
+                        this.selectMoveWord(1)
+                        return true
+                    case "\r":
+                    case "\n": // enter — confirm selection
+                        this.confirmSelect()
+                        return true
+                    case "D":
+                    case "d": // dictionary with selected word
+                        this.confirmSelectAndDict()
+                        return true
+                }
+                return true // consume all other input in select mode
+            }
+
+            // ── NORMAL MODE ──
             switch (sequence) {
                 // Scrolling
                 case "j":
@@ -629,6 +673,11 @@ export class ReaderView {
                 case "b":
                     addBookmark(this.book.id, this.currentChapter, this.readingPane.scrollTop, "")
                     showToast(this.renderer, "🔖 Bookmark saved", "success")
+                    return true
+
+                // Select mode — inline word picker
+                case "s":
+                    this.enterSelectMode()
                     return true
 
                 // Phase 3: Bookmarks panel
@@ -764,6 +813,211 @@ export class ReaderView {
             showToast(this.renderer, `📝 Exported to ${result.path}`, "success")
         } else {
             showToast(this.renderer, `Export failed: ${result.error}`, "error")
+        }
+    }
+
+    // ── Inline Select Mode ──────────────────────────────────────
+
+    private enterSelectMode() {
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter || chapter.paragraphs.length === 0) return
+
+        this.selectMode = true
+        this.selectParaIdx = 0
+        this.selectWordIdx = 0
+
+        // Find first paragraph with actual text
+        while (this.selectParaIdx < chapter.paragraphs.length) {
+            const words = this.getParaWords(this.selectParaIdx)
+            if (words.length > 0) break
+            this.selectParaIdx++
+        }
+
+        this.statusBar.setMode("select")
+        showToast(this.renderer, "✎ SELECT MODE — h/l word · j/k para · Enter select · D dict · Esc exit", "info")
+        this.highlightCurrentWord()
+    }
+
+    private exitSelectMode() {
+        if (!this.selectMode) return
+        // Restore the previously highlighted paragraph to normal
+        this.restoreParagraph(this.selectParaIdx)
+        this.selectMode = false
+        this.statusBar.setMode("reader")
+    }
+
+    private getParaWords(paraIdx: number): string[] {
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter) return []
+        const para = chapter.paragraphs[paraIdx]
+        if (!para || !para.text) return []
+        return para.text.split(/\s+/).filter(w => w.length > 0)
+    }
+
+    private selectMoveWord(delta: number) {
+        const words = this.getParaWords(this.selectParaIdx)
+        if (words.length === 0) return
+
+        let newIdx = this.selectWordIdx + delta
+
+        // Wrap to next/prev paragraph
+        if (newIdx >= words.length) {
+            this.selectMoveParagraph(1)
+            return
+        }
+        if (newIdx < 0) {
+            // Move to prev paragraph, last word
+            const chapter = this.parsedBook.chapters[this.currentChapter]
+            if (!chapter) return
+            const oldParaIdx = this.selectParaIdx
+            let prevIdx = this.selectParaIdx - 1
+            while (prevIdx >= 0 && this.getParaWords(prevIdx).length === 0) prevIdx--
+            if (prevIdx < 0) { this.selectWordIdx = 0; return }
+
+            this.restoreParagraph(oldParaIdx)
+            this.selectParaIdx = prevIdx
+            const prevWords = this.getParaWords(prevIdx)
+            this.selectWordIdx = prevWords.length - 1
+            this.highlightCurrentWord()
+            return
+        }
+
+        this.selectWordIdx = newIdx
+        this.highlightCurrentWord()
+    }
+
+    private selectMoveParagraph(delta: number) {
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter) return
+
+        const oldParaIdx = this.selectParaIdx
+        let newIdx = this.selectParaIdx + delta
+
+        // Skip empty paragraphs
+        while (newIdx >= 0 && newIdx < chapter.paragraphs.length && this.getParaWords(newIdx).length === 0) {
+            newIdx += delta
+        }
+
+        if (newIdx < 0 || newIdx >= chapter.paragraphs.length) return
+
+        this.restoreParagraph(oldParaIdx)
+        this.selectParaIdx = newIdx
+        this.selectWordIdx = 0
+        this.highlightCurrentWord()
+    }
+
+    private highlightCurrentWord() {
+        const th = getTheme()
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter) return
+        const para = chapter.paragraphs[this.selectParaIdx]
+        if (!para) return
+
+        const words = this.getParaWords(this.selectParaIdx)
+        if (words.length === 0) return
+        this.selectWordIdx = Math.max(0, Math.min(this.selectWordIdx, words.length - 1))
+
+        // Offset: chapter label + chapter title + separator = 3 nodes before paragraphs
+        const nodeIdx = this.selectParaIdx + 3
+        const node = this.chapterTextNodes[nodeIdx]
+        if (!node) return
+
+        // Build styled text with the selected word highlighted via OpenTUI's bg/fg
+        const before = words.slice(0, this.selectWordIdx).join(" ")
+        const highlighted = words[this.selectWordIdx]!
+        const after = words.slice(this.selectWordIdx + 1).join(" ")
+
+        const prefix = before ? before + " " : ""
+        const suffix = after ? " " + after : ""
+
+        switch (para.type) {
+            case "heading":
+                node.content = t`\n\n${fg(th.text.body)(prefix)}${bold(bg(th.accent.amber)(fg(th.bg.void)(highlighted)))}${fg(th.text.body)(suffix)}\n`
+                break
+            case "quote":
+                node.content = t`\n  ${fg(th.accent.cyan)("│")} ${fg(th.text.muted)(prefix)}${bold(bg(th.accent.amber)(fg(th.bg.void)(highlighted)))}${fg(th.text.muted)(suffix)}\n`
+                break
+            case "list-item": {
+                const indent = "  ".repeat((para.indent || 0) + 1)
+                const bullet = para.ordered ? `${para.index}.` : "•"
+                node.content = t`${indent}${fg(th.accent.cyan)(bullet)} ${fg(th.text.body)(prefix)}${bold(bg(th.accent.amber)(fg(th.bg.void)(highlighted)))}${fg(th.text.body)(suffix)}`
+                break
+            }
+            default:
+                node.content = t`\n${fg(th.text.body)(prefix)}${bold(bg(th.accent.amber)(fg(th.bg.void)(highlighted)))}${fg(th.text.body)(suffix)}\n`
+                break
+        }
+
+        // Scroll to keep the selected paragraph visible
+        const estimatedLine = this.selectParaIdx * 2
+        this.readingPane.scrollTo(Math.max(0, estimatedLine - 5))
+    }
+
+    private restoreParagraph(paraIdx: number) {
+        const th = getTheme()
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter) return
+        const para = chapter.paragraphs[paraIdx]
+        if (!para) return
+
+        const nodeIdx = paraIdx + 3 // 3 fixed nodes before paragraphs
+        const node = this.chapterTextNodes[nodeIdx]
+        if (!node) return
+
+        // Restore original content (no ANSI highlights)
+        switch (para.type) {
+            case "heading":
+                node.content = t`\n\n${bold(fg(
+                    para.level === 1 ? th.accent.purple :
+                        para.level === 2 ? th.accent.blue :
+                            para.level === 3 ? th.accent.cyan :
+                                th.accent.green
+                )(para.text))}\n`
+                break
+            case "quote":
+                node.content = t`\n  ${fg(th.accent.cyan)("│")} ${italic(fg(th.text.muted)(para.text))}\n`
+                break
+            case "list-item": {
+                const indent = "  ".repeat((para.indent || 0) + 1)
+                let bullet: string
+                if (para.ordered) {
+                    bullet = `${para.index}.`
+                } else {
+                    const bullets = ["•", "◦", "▪", "▸"]
+                    bullet = bullets[Math.min(para.indent || 0, bullets.length - 1)]!
+                }
+                node.content = t`${indent}${fg(th.accent.cyan)(bullet)} ${fg(th.text.body)(para.text)}`
+                break
+            }
+            case "code":
+                node.content = `\n    ${para.text.split("\n").join("\n    ")}\n`
+                node.fg = th.accent.green
+                break
+            default:
+                node.content = para.text ? `\n${para.text}\n` : ""
+                node.fg = th.text.body
+                break
+        }
+    }
+
+    private confirmSelect() {
+        const words = this.getParaWords(this.selectParaIdx)
+        const word = words[this.selectWordIdx] || ""
+        const clean = word.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, "")
+        if (clean) {
+            this.lastSelectedText = clean
+            showToast(this.renderer, `✎ "${clean}" selected — press D for dictionary`, "success")
+        }
+        this.exitSelectMode()
+    }
+
+    private confirmSelectAndDict() {
+        const words = this.getParaWords(this.selectParaIdx)
+        const word = words[this.selectWordIdx] || ""
+        const clean = word.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, "")
+        this.exitSelectMode()
+        if (clean) {
+            this.showDictionary(clean)
         }
     }
 

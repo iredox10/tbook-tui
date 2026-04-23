@@ -8,7 +8,7 @@ import { theme, progressBar, progressColor } from "../utils/theme"
 
 export interface StatusBarOptions {
     renderer: CliRenderer
-    mode?: "library" | "reader" | "stats" | "splash"
+    mode?: "library" | "reader" | "stats" | "splash" | "select"
 }
 
 export class StatusBar {
@@ -59,7 +59,7 @@ export class StatusBar {
         this.setMode(opts.mode || "library")
     }
 
-    setMode(mode: "library" | "reader" | "stats" | "splash") {
+    setMode(mode: "library" | "reader" | "stats" | "splash" | "select") {
         switch (mode) {
             case "splash":
                 this.leftText.content = t`${fg(theme.accent.cyan)("TBOOK")} v1.0`
@@ -70,7 +70,11 @@ export class StatusBar {
                 this.rightText.content = t`${fg(theme.text.subtle)("↑↓ Navigate · ⏎ Open · / Search · n Import · d Delete · ? Help")}`
                 break
             case "reader":
-                this.rightText.content = t`${fg(theme.text.subtle)("j/k Scroll · t TOC · / Search · D Dict · E Export · ? Help")}`
+                this.rightText.content = t`${fg(theme.text.subtle)("j/k Scroll · s Select · t TOC · / Search · D Dict · ? Help")}`
+                break
+            case "select":
+                this.leftText.content = t`${bold(fg(theme.accent.amber)("✎ SELECT"))}`
+                this.rightText.content = t`${fg(theme.text.subtle)("h/l Word · j/k Para · ⏎ Select · D Dict · Esc Exit")}`
                 break
             case "stats":
                 this.rightText.content = t`${fg(theme.text.subtle)("q Back · ← → Week")}`
