@@ -13,6 +13,8 @@ import {
 import { theme, truncate, progressBar, progressColor, formatDuration, getActiveTheme, setActiveTheme, getTheme } from "../utils/theme"
 import { parseEpub, type ParsedBook, type Chapter } from "../services/epub-parser"
 import { parsePdf } from "../services/pdf-parser"
+import { highlightCode } from "../utils/syntax-highlight"
+import { formatTable } from "../utils/html-to-text"
 import { getBookById, updateReadingProgress, addBookmark, recordReading, addHighlight, getHighlights, getChapterHighlights, addToVocabulary, type BookRecord, type HighlightRecord } from "../services/database"
 import { StatusBar } from "../components/status-bar"
 import { showToast } from "../components/toast"
@@ -385,24 +387,83 @@ export class ReaderView {
                     break
                 }
 
-                case "code":
+                case "code": {
+                    const lang = p.language || "text"
+                    const langLabel = lang !== "text" ? ` ${lang} ` : ""
+                    const highlighted = highlightCode(p.text, lang)
+                    const codeLines = highlighted.split("\n")
+                    const lineNumWidth = String(codeLines.length).length
+                    const numberedLines = codeLines.map((line, idx) => {
+                        const num = String(idx + 1).padStart(lineNumWidth)
+                        return `  \x1b[90m${num} │\x1b[0m ${line}`
+                    }).join("\n")
+
+                    const topBar = langLabel
+                        ? `\n  \x1b[90m╭${"─".repeat(4)}\x1b[33m${langLabel}\x1b[90m${"─".repeat(Math.max(1, 30 - langLabel.length))}\x1b[0m`
+                        : `\n  \x1b[90m╭${"─".repeat(35)}\x1b[0m`
+                    const botBar = `  \x1b[90m╰${"─".repeat(35)}\x1b[0m`
+
                     node = new TextRenderable(this.renderer, {
                         id: `para-${i}`,
                         ...textProps,
-                        content: `\n    ${p.text.split("\n").join("\n    ")}\n`,
-                        fg: th.accent.green,
+                        content: `${topBar}\n${numberedLines}\n${botBar}\n`,
                     })
                     break
+                }
 
-                default:
-                    // Regular paragraph — add proper spacing
+                case "table": {
+                    const tableText = p.tableRows ? formatTable(p.tableRows) : p.text
                     node = new TextRenderable(this.renderer, {
                         id: `para-${i}`,
                         ...textProps,
-                        content: p.text ? `\n${p.text}\n` : "",
+                        content: `\n${tableText}\n`,
                         fg: th.text.body,
                     })
                     break
+                }
+
+                case "note": {
+                    const icons: Record<string, string> = {
+                        tip: "💡", warning: "⚠️", note: "📝", important: "❗",
+                    }
+                    const colors: Record<string, string> = {
+                        tip: th.accent.green, warning: th.accent.amber,
+                        note: th.accent.cyan, important: th.accent.pink,
+                    }
+                    const kind = p.noteKind || "note"
+                    const icon = icons[kind] || "📝"
+                    const color = colors[kind] || th.accent.cyan
+                    node = new TextRenderable(this.renderer, {
+                        id: `para-${i}`,
+                        ...textProps,
+                        content: t`\n  ${fg(color)("┃")} ${icon} ${bold(fg(color)(kind.toUpperCase()))}\n  ${fg(color)("┃")} ${fg(th.text.body)(p.text)}\n`,
+                    })
+                    break
+                }
+
+                default: {
+                    // Regular paragraph — style inline code markers
+                    let content = p.text || ""
+                    if (content.includes("`")) {
+                        // Replace `code` backtick markers with styled inline code
+                        content = content.replace(/`([^`]+)`/g, (_, code) => {
+                            return `\x1b[36m\x1b[48;5;236m ${code} \x1b[0m`
+                        })
+                        node = new TextRenderable(this.renderer, {
+                            id: `para-${i}`,
+                            ...textProps,
+                            content: content ? `\n${content}\n` : "",
+                        })
+                    } else {
+                        node = new TextRenderable(this.renderer, {
+                            id: `para-${i}`,
+                            ...textProps,
+                            content: content ? `\n${content}\n` : "",
+                            fg: th.text.body,
+                        })
+                    }
+                    break
+                }
             }
 
             this.readingPane.add(node)
@@ -1180,14 +1241,51 @@ export class ReaderView {
                 node.content = t`${indent}${fg(th.accent.cyan)(bullet)} ${fg(th.text.body)(para.text)}`
                 break
             }
-            case "code":
-                node.content = `\n    ${para.text.split("\n").join("\n    ")}\n`
-                node.fg = th.accent.green
+            case "code": {
+                const lang = para.language || "text"
+                const langLabel = lang !== "text" ? ` ${lang} ` : ""
+                const highlighted = highlightCode(para.text, lang)
+                const codeLines = highlighted.split("\n")
+                const lineNumWidth = String(codeLines.length).length
+                const numberedLines = codeLines.map((line: string, idx: number) => {
+                    const num = String(idx + 1).padStart(lineNumWidth)
+                    return `  \x1b[90m${num} │\x1b[0m ${line}`
+                }).join("\n")
+                const topBar = langLabel
+                    ? `\n  \x1b[90m╭${"─".repeat(4)}\x1b[33m${langLabel}\x1b[90m${"─".repeat(Math.max(1, 30 - langLabel.length))}\x1b[0m`
+                    : `\n  \x1b[90m╭${"─".repeat(35)}\x1b[0m`
+                const botBar = `  \x1b[90m╰${"─".repeat(35)}\x1b[0m`
+                node.content = `${topBar}\n${numberedLines}\n${botBar}\n`
                 break
-            default:
-                node.content = para.text ? `\n${para.text}\n` : ""
+            }
+            case "table": {
+                const tableText = para.tableRows ? formatTable(para.tableRows) : para.text
+                node.content = `\n${tableText}\n`
                 node.fg = th.text.body
                 break
+            }
+            case "note": {
+                const kind = para.noteKind || "note"
+                const icons: Record<string, string> = { tip: "💡", warning: "⚠️", note: "📝", important: "❗" }
+                const colors: Record<string, string> = { tip: th.accent.green, warning: th.accent.amber, note: th.accent.cyan, important: th.accent.pink }
+                const icon = icons[kind] || "📝"
+                const color = colors[kind] || th.accent.cyan
+                node.content = t`\n  ${fg(color)("┃")} ${icon} ${bold(fg(color)(kind.toUpperCase()))}\n  ${fg(color)("┃")} ${fg(th.text.body)(para.text)}\n`
+                break
+            }
+            default: {
+                let content = para.text || ""
+                if (content.includes("`")) {
+                    content = content.replace(/`([^`]+)`/g, (_: string, code: string) => {
+                        return `\x1b[36m\x1b[48;5;236m ${code} \x1b[0m`
+                    })
+                    node.content = content ? `\n${content}\n` : ""
+                } else {
+                    node.content = content ? `\n${content}\n` : ""
+                    node.fg = th.text.body
+                }
+                break
+            }
         }
     }
 

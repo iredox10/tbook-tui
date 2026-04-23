@@ -14,6 +14,13 @@ A premium **Terminal Book Reader** built with [OpenTUI](https://opentui.com) —
 - **Reading Progress** — Automatic save/resume with per-book chapter tracking
 - **Vim Keybinds** — `j/k` scroll, `h/l` chapters, `space` page-down, `g/G` jump
 
+### 💻 Programming Book Support
+- **Syntax Highlighting** — Auto-detects 10+ languages (Rust, Python, JS/TS, Go, Java, C, SQL, Bash…)
+- **Code Blocks** — Bordered boxes with language labels, line numbers, and colored syntax
+- **Inline Code** — `code` markers rendered with cyan background
+- **Tables** — HTML tables rendered with box-drawing characters
+- **Callouts/Notes** — Tip, Warning, Note, Important admonitions with colored sidebar
+
 ### 🎨 Premium UI
 - **Tokyo Night Design** — Dark & Light theme with `T` toggle
 - **ASCII Art Splash** — Stunning first-impression branding
