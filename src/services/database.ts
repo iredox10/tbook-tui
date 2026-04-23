@@ -48,6 +48,12 @@ export interface HighlightRecord {
     created_at: string
 }
 
+export interface VocabRecord {
+    word: string
+    definition: string
+    lookup_count: number
+}
+
 let db: Database
 
 /**
@@ -116,6 +122,15 @@ export function getDb(): Database {
       color TEXT DEFAULT 'yellow',
       note TEXT DEFAULT '',
       created_at TEXT DEFAULT (datetime('now'))
+    )
+  `)
+
+    db.run(`
+    CREATE TABLE IF NOT EXISTS vocabulary (
+      word TEXT PRIMARY KEY,
+      definition TEXT DEFAULT '',
+      lookup_count INTEGER DEFAULT 1,
+      last_lookup TEXT DEFAULT (datetime('now'))
     )
   `)
 
@@ -301,4 +316,33 @@ export function addHighlight(bookId: number, chapter: number, paragraphIndex: nu
 export function removeHighlight(id: number): void {
     const db = getDb()
     db.run("DELETE FROM highlights WHERE id = ?", [id])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Vocabulary
+// ─────────────────────────────────────────────────────────────
+
+export function addToVocabulary(word: string, definition: string): void {
+    const db = getDb()
+    db.run(
+        `INSERT INTO vocabulary (word, definition, lookup_count, last_lookup)
+     VALUES (?, ?, 1, datetime('now'))
+     ON CONFLICT(word) DO UPDATE SET
+       lookup_count = lookup_count + 1,
+       definition = excluded.definition,
+       last_lookup = datetime('now')`,
+        [word.toLowerCase(), definition],
+    )
+}
+
+export function getVocabulary(): VocabRecord[] {
+    const db = getDb()
+    return db.query(
+        "SELECT word, definition, lookup_count FROM vocabulary ORDER BY last_lookup DESC"
+    ).all() as VocabRecord[]
+}
+
+export function removeVocabWord(word: string): void {
+    const db = getDb()
+    db.run("DELETE FROM vocabulary WHERE word = ?", [word.toLowerCase()])
 }

@@ -10,6 +10,7 @@ import {
 } from "@opentui/core"
 import { theme } from "../utils/theme"
 import { lookupWord, type DictionaryEntry } from "../services/dictionary"
+import { addToVocabulary } from "../services/database"
 
 export class DictionaryModal {
     private renderer: CliRenderer
@@ -172,6 +173,12 @@ export class DictionaryModal {
             this.resultNodes.push(notFound)
             return
         }
+
+        // Save to vocabulary DB
+        const defSummary = entry.meanings.map(m =>
+            `${m.partOfSpeech}: ${m.definitions.map(d => d.definition).join("; ")}`
+        ).join(" | ")
+        addToVocabulary(clean, defSummary)
 
         this.renderEntry(entry)
     }

@@ -13,7 +13,7 @@ import {
 import { theme, truncate, progressBar, progressColor, formatDuration, getActiveTheme, setActiveTheme, getTheme } from "../utils/theme"
 import { parseEpub, type ParsedBook, type Chapter } from "../services/epub-parser"
 import { parsePdf } from "../services/pdf-parser"
-import { getBookById, updateReadingProgress, addBookmark, recordReading, addHighlight, getHighlights, getChapterHighlights, type BookRecord, type HighlightRecord } from "../services/database"
+import { getBookById, updateReadingProgress, addBookmark, recordReading, addHighlight, getHighlights, getChapterHighlights, addToVocabulary, type BookRecord, type HighlightRecord } from "../services/database"
 import { StatusBar } from "../components/status-bar"
 import { showToast } from "../components/toast"
 import { HelpOverlay } from "../components/help-overlay"
@@ -21,6 +21,9 @@ import { ChapterTocModal } from "../components/chapter-toc"
 import { SearchModal } from "../components/search-modal"
 import { BookmarksPanel } from "../components/bookmarks-panel"
 import { DictionaryModal } from "../components/dictionary-modal"
+import { VocabularyPanel } from "../components/vocabulary-panel"
+import { AnnotationsPanel } from "../components/annotations-panel"
+import { RsvpReader } from "../components/rsvp-reader"
 import { exportBook } from "../services/export"
 import { loadConfig, updateConfig } from "../services/config"
 import type { App } from "../app"
@@ -66,8 +69,12 @@ export class ReaderView {
     private searchModal: SearchModal | null = null
     private bookmarksPanel: BookmarksPanel | null = null
     private dictionaryModal: DictionaryModal | null = null
+    private vocabularyPanel: VocabularyPanel | null = null
+    private annotationsPanel: AnnotationsPanel | null = null
+    private rsvpReader: RsvpReader | null = null
     private modalOpen = false
     private lastSelectedText = ""
+    private focusMode = false
 
     // Inline select mode / visual mode
     private selectMode = false
@@ -733,6 +740,26 @@ export class ReaderView {
                     this.exportToMarkdown()
                     return true
 
+                // Vocabulary panel
+                case "V":
+                    this.showVocabulary()
+                    return true
+
+                // Annotations panel
+                case "N":
+                    this.showAnnotations()
+                    return true
+
+                // RSVP speed reader
+                case "r":
+                    this.showRsvp()
+                    return true
+
+                // Focus mode — hide sidebar + status bar
+                case "f":
+                    this.toggleFocusMode()
+                    return true
+
                 // Sidebar toggle
                 case "\t":
                     this.sidebarVisible = !this.sidebarVisible
@@ -834,6 +861,68 @@ export class ReaderView {
         } else {
             showToast(this.renderer, `Export failed: ${result.error}`, "error")
         }
+    }
+
+    private showVocabulary() {
+        this.modalOpen = true
+        this.vocabularyPanel = new VocabularyPanel(this.renderer, () => {
+            this.modalOpen = false
+            this.readingPane.focus()
+        })
+        this.vocabularyPanel.show()
+    }
+
+    private showAnnotations() {
+        this.modalOpen = true
+        this.annotationsPanel = new AnnotationsPanel(
+            this.renderer,
+            () => {
+                this.modalOpen = false
+                this.readingPane.focus()
+            },
+            (chapter: number, paraIdx: number) => {
+                this.modalOpen = false
+                this.currentChapter = chapter
+                this.renderChapter()
+                // Scroll to the paragraph
+                const estimatedLine = paraIdx * 2
+                this.readingPane.scrollTo(Math.max(0, estimatedLine - 3))
+                this.readingPane.focus()
+            },
+        )
+        this.annotationsPanel.show(this.book.id)
+    }
+
+    private toggleFocusMode() {
+        this.focusMode = !this.focusMode
+        if (this.focusMode) {
+            this.sidebarVisible = false
+            this.sidebar.width = 0
+            this.statusBar.destroy()
+            showToast(this.renderer, "🎯 Focus mode ON — press f to restore", "info")
+        } else {
+            this.sidebarVisible = true
+            this.sidebar.width = 20
+            // Recreate status bar (it was destroyed)
+            this.statusBar = new StatusBar({ renderer: this.renderer, mode: "reader" })
+            this.statusBar.setMode("reader")
+            this.updateStatusProgress()
+            showToast(this.renderer, "📖 Focus mode OFF", "info")
+        }
+    }
+
+    private showRsvp() {
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter || chapter.paragraphs.length === 0) {
+            showToast(this.renderer, "No text to speed-read", "error")
+            return
+        }
+        this.modalOpen = true
+        this.rsvpReader = new RsvpReader(this.renderer, () => {
+            this.modalOpen = false
+            this.readingPane.focus()
+        })
+        this.rsvpReader.show(chapter.paragraphs)
     }
 
     // ── Inline Select Mode / Visual Mode ─────────────────────────
@@ -1153,6 +1242,9 @@ export class ReaderView {
         this.searchModal?.destroy()
         this.bookmarksPanel?.destroy()
         this.dictionaryModal?.destroy()
+        this.vocabularyPanel?.destroy()
+        this.annotationsPanel?.destroy()
+        this.rsvpReader?.destroy()
         this.statusBar.destroy()
         try { this.renderer.root.remove(this.container.id) } catch { }
     }

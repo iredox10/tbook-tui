@@ -23,15 +23,24 @@ A premium **Terminal Book Reader** built with [OpenTUI](https://opentui.com) —
 ### 🔥 Power Features
 - **Text Zoom** — `+`/`-` to adjust reading width (8 zoom levels)
 - **Auto-Scroll** — `a` to toggle, `A` to cycle speed (Slow/Normal/Fast/Rapid)
+- **Focus Mode** — `f` to hide sidebar & status bar for distraction-free reading
 - **Full-Text Search** — `/` to search within the current book with context snippets
 - **Chapter TOC Modal** — `t` to jump to any chapter with word counts
 - **Bookmarks** — `b` to save, `B` to view/jump-to/delete bookmarks
 - **Help Overlay** — `?` for complete keybind reference
 - **Book Deletion** — `d` to remove books from library
 
+### ✎ Select & Annotate
+- **Select Mode** — `s` enters word cursor for precise text selection
+- **Visual Mode** — `v` extends to range selection across paragraphs
+- **Highlight Text** — `m` marks selected text with persistent highlights
+- **Dictionary Lookup** — `d`/`D` to look up word definitions via free API
+- **Vocabulary Tracker** — `V` shows all looked-up words with lookup counts
+- **Annotations Panel** — `N` views all highlights with jump-to-source
+- **RSVP Speed Reader** — `r` flashes words one at a time (50-1500 WPM)
+
 ### 🧰 Advanced
 - **Obsidian/Logseq Export** — `E` exports notes & bookmarks as markdown with YAML frontmatter
-- **Dictionary Lookup** — `D` to look up word definitions via free API
 - **Persistent Config** — Theme, zoom, scroll speed, export format saved to `~/.tbook/config.json`
 - **Session Persistence** — All preferences survive between sessions
 
@@ -69,16 +78,31 @@ brew install poppler
 | `+` / `-` | Zoom text wider / narrower |
 | `a` | Toggle auto-scroll |
 | `A` | Cycle auto-scroll speed |
+| `f` | Toggle focus mode |
 | `T` | Toggle dark / light theme |
 | `t` | Chapter list (TOC modal) |
 | `/` | Search in book |
 | `b` | Add bookmark |
 | `B` | View bookmarks |
+| `N` | View annotations & highlights |
+| `V` | Vocabulary list |
+| `s` | Enter select mode |
+| `r` | RSVP speed reader |
 | `D` | Dictionary lookup |
 | `E` | Export to Obsidian/Logseq |
 | `Tab` | Toggle chapter sidebar |
 | `?` | Help overlay |
 | `q` | Back to library |
+
+### Select Mode
+| Key | Action |
+|-----|--------|
+| `h` / `l` | Move cursor left / right (word) |
+| `j` / `k` | Move cursor up / down (paragraph) |
+| `v` | Toggle visual mode (range select) |
+| `m` | Mark / highlight selection |
+| `d` | Dictionary lookup on word |
+| `Esc` | Exit select mode |
 
 ### Library
 | Key | Action |
@@ -110,7 +134,10 @@ src/
 │   ├── chapter-toc.ts      # Chapter navigation modal
 │   ├── search-modal.ts     # Full-text search with results
 │   ├── bookmarks-panel.ts  # Bookmark viewer & manager
-│   └── dictionary-modal.ts # Word definition lookup
+│   ├── dictionary-modal.ts # Word definition lookup
+│   ├── vocabulary-panel.ts # Vocabulary list with definitions
+│   ├── annotations-panel.ts# Highlights & annotations viewer
+│   └── rsvp-reader.ts      # RSVP speed reader overlay
 ├── services/
 │   ├── database.ts         # SQLite via bun:sqlite
 │   ├── epub-parser.ts      # EPUB → structured chapters
@@ -126,7 +153,7 @@ src/
 ## 🗄️ Data Storage
 
 All data is stored in `~/.tbook/`:
-- `tbook.db` — SQLite database (books, bookmarks, reading stats)
+- `tbook.db` — SQLite database (books, bookmarks, reading stats, highlights, vocabulary)
 - `config.json` — User preferences (theme, zoom, export format)
 
 ## 📄 License
