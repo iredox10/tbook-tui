@@ -8,7 +8,7 @@ import {
     InputRenderable, InputRenderableEvents,
     t, bold, italic, fg,
 } from "@opentui/core"
-import { theme, truncate } from "../utils/theme"
+import { theme } from "../utils/theme"
 import { lookupWord, type DictionaryEntry } from "../services/dictionary"
 
 export class DictionaryModal {
@@ -125,8 +125,17 @@ export class DictionaryModal {
         // Input handler — prepend for high priority (runs before reader's handler)
         this.inputHandler = (seq: string) => {
             if (!this.visible) return false
-            if (seq === "\x1b") {
+            if (seq === "\x1b" || seq === "\x1b\x1b" || seq === "q") {
                 this.hide()
+                return true
+            }
+            // Scroll results with j/k
+            if (seq === "j" || seq === "\x1b[B") {
+                this.resultBox.scrollBy(1)
+                return true
+            }
+            if (seq === "k" || seq === "\x1b[A") {
+                this.resultBox.scrollBy(-1)
                 return true
             }
             return false
@@ -171,7 +180,9 @@ export class DictionaryModal {
         // Word + phonetic
         const wordNode = new TextRenderable(this.renderer, {
             id: "dict-word",
-            content: t`\n  ${bold(fg(theme.accent.green)(entry.word))}${entry.phonetic ? `  ${fg(theme.text.subtle)(entry.phonetic)}` : ""}`,
+            content: entry.phonetic
+                ? t`\n  ${bold(fg(theme.accent.green)(entry.word))}  ${fg(theme.text.subtle)(entry.phonetic)}`
+                : t`\n  ${bold(fg(theme.accent.green)(entry.word))}`,
         })
         this.resultBox.add(wordNode)
         this.resultNodes.push(wordNode)
@@ -192,7 +203,8 @@ export class DictionaryModal {
 
                 const defNode = new TextRenderable(this.renderer, {
                     id: `dict-def-${mi}-${di}`,
-                    content: t`   ${fg(theme.text.muted)(`${di + 1}.`)} ${fg(theme.text.body)(truncate(def.definition, 50))}`,
+                    content: t`   ${fg(theme.text.muted)(`${di + 1}.`)} ${fg(theme.text.body)(def.definition)}`,
+                    wrapMode: "word",
                 })
                 this.resultBox.add(defNode)
                 this.resultNodes.push(defNode)
@@ -200,7 +212,8 @@ export class DictionaryModal {
                 if (def.example) {
                     const exNode = new TextRenderable(this.renderer, {
                         id: `dict-ex-${mi}-${di}`,
-                        content: t`      ${italic(fg(theme.text.subtle)(`"${truncate(def.example, 45)}"`))}`,
+                        content: t`      ${italic(fg(theme.text.subtle)(`"${def.example}"`))}`,
+                        wrapMode: "word",
                     })
                     this.resultBox.add(exNode)
                     this.resultNodes.push(exNode)

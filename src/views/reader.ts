@@ -69,10 +69,12 @@ export class ReaderView {
     private modalOpen = false
     private lastSelectedText = ""
 
-    // Inline select mode
+    // Inline select mode / visual mode
     private selectMode = false
+    private visualMode = false  // true = extending a selection range
     private selectParaIdx = 0
     private selectWordIdx = 0
+    private selectionAnchor: { paraIdx: number; wordIdx: number } | null = null
 
     constructor(renderer: CliRenderer, app: App) {
         this.renderer = renderer
@@ -621,9 +623,13 @@ export class ReaderView {
                     case "d": // dictionary with selected word
                         this.confirmSelectAndDict()
                         return true
-                    case "m": // mark/highlight current paragraph
+                    case "m": // mark/highlight selected text
                     case "M":
                         this.highlightSelectedText()
+                        return true
+                    case "v": // toggle visual selection (set anchor)
+                    case "V":
+                        this.toggleVisualMode()
                         return true
                 }
                 return true // consume all other input in select mode
@@ -830,13 +836,15 @@ export class ReaderView {
         }
     }
 
-    // ── Inline Select Mode ──────────────────────────────────────
+    // ── Inline Select Mode / Visual Mode ─────────────────────────
 
     private enterSelectMode() {
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter || chapter.paragraphs.length === 0) return
 
         this.selectMode = true
+        this.visualMode = false
+        this.selectionAnchor = null
         this.selectParaIdx = 0
         this.selectWordIdx = 0
 
@@ -848,16 +856,31 @@ export class ReaderView {
         }
 
         this.statusBar.setMode("select")
-        showToast(this.renderer, "✎ SELECT — h/l word · j/k para · ⏎ select · m highlight · D dict · Esc exit", "info")
-        this.highlightCurrentWord()
+        showToast(this.renderer, "✎ SELECT — h/l word · j/k para · v visual · m mark · D dict · Esc exit", "info")
+        this.renderSelection()
     }
 
     private exitSelectMode() {
         if (!this.selectMode) return
-        // Restore the previously highlighted paragraph to normal
-        this.restoreParagraph(this.selectParaIdx)
+        this.clearAllSelectionHighlights()
         this.selectMode = false
+        this.visualMode = false
+        this.selectionAnchor = null
         this.statusBar.setMode("reader")
+    }
+
+    private toggleVisualMode() {
+        if (this.visualMode) {
+            this.clearAllSelectionHighlights()
+            this.visualMode = false
+            this.selectionAnchor = null
+            showToast(this.renderer, "✎ Visual off — single word cursor", "info")
+        } else {
+            this.visualMode = true
+            this.selectionAnchor = { paraIdx: this.selectParaIdx, wordIdx: this.selectWordIdx }
+            showToast(this.renderer, "✎ VISUAL — move to extend selection · m mark · d dict · Esc cancel", "info")
+        }
+        this.renderSelection()
     }
 
     private getParaWords(paraIdx: number): string[] {
@@ -868,82 +891,143 @@ export class ReaderView {
         return para.text.split(/\s+/).filter(w => w.length > 0)
     }
 
+    /** Get ordered selection range */
+    private getSelectionRange(): { sp: number; sw: number; ep: number; ew: number } {
+        if (!this.visualMode || !this.selectionAnchor) {
+            return { sp: this.selectParaIdx, sw: this.selectWordIdx, ep: this.selectParaIdx, ew: this.selectWordIdx }
+        }
+        const a = this.selectionAnchor
+        const c = { paraIdx: this.selectParaIdx, wordIdx: this.selectWordIdx }
+        if (a.paraIdx < c.paraIdx || (a.paraIdx === c.paraIdx && a.wordIdx <= c.wordIdx)) {
+            return { sp: a.paraIdx, sw: a.wordIdx, ep: c.paraIdx, ew: c.wordIdx }
+        }
+        return { sp: c.paraIdx, sw: c.wordIdx, ep: a.paraIdx, ew: a.wordIdx }
+    }
+
+    /** Extract text from the current selection range */
+    private getSelectedText(): string {
+        const { sp, sw, ep, ew } = this.getSelectionRange()
+        const result: string[] = []
+        for (let pi = sp; pi <= ep; pi++) {
+            const words = this.getParaWords(pi)
+            const wStart = (pi === sp) ? sw : 0
+            const wEnd = (pi === ep) ? Math.min(ew, words.length - 1) : words.length - 1
+            for (let wi = wStart; wi <= wEnd; wi++) {
+                if (words[wi]) result.push(words[wi]!)
+            }
+        }
+        return result.join(" ")
+    }
+
     private selectMoveWord(delta: number) {
         const words = this.getParaWords(this.selectParaIdx)
         if (words.length === 0) return
 
-        let newIdx = this.selectWordIdx + delta
+        const newIdx = this.selectWordIdx + delta
 
-        // Wrap to next/prev paragraph
         if (newIdx >= words.length) {
             this.selectMoveParagraph(1)
             return
         }
         if (newIdx < 0) {
-            // Move to prev paragraph, last word
             const chapter = this.parsedBook.chapters[this.currentChapter]
             if (!chapter) return
-            const oldParaIdx = this.selectParaIdx
             let prevIdx = this.selectParaIdx - 1
             while (prevIdx >= 0 && this.getParaWords(prevIdx).length === 0) prevIdx--
             if (prevIdx < 0) { this.selectWordIdx = 0; return }
 
-            this.restoreParagraph(oldParaIdx)
+            if (!this.visualMode) this.restoreParagraph(this.selectParaIdx)
             this.selectParaIdx = prevIdx
-            const prevWords = this.getParaWords(prevIdx)
-            this.selectWordIdx = prevWords.length - 1
-            this.highlightCurrentWord()
+            this.selectWordIdx = this.getParaWords(prevIdx).length - 1
+            this.renderSelection()
             return
         }
 
         this.selectWordIdx = newIdx
-        this.highlightCurrentWord()
+        this.renderSelection()
     }
 
     private selectMoveParagraph(delta: number) {
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter) return
 
-        const oldParaIdx = this.selectParaIdx
         let newIdx = this.selectParaIdx + delta
-
-        // Skip empty paragraphs
         while (newIdx >= 0 && newIdx < chapter.paragraphs.length && this.getParaWords(newIdx).length === 0) {
             newIdx += delta
         }
-
         if (newIdx < 0 || newIdx >= chapter.paragraphs.length) return
 
-        this.restoreParagraph(oldParaIdx)
+        if (!this.visualMode) this.restoreParagraph(this.selectParaIdx)
         this.selectParaIdx = newIdx
         this.selectWordIdx = 0
-        this.highlightCurrentWord()
+        this.renderSelection()
     }
 
-    private highlightCurrentWord() {
+    /** Render the current selection highlight */
+    private renderSelection() {
         const th = getTheme()
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter) return
-        const para = chapter.paragraphs[this.selectParaIdx]
-        if (!para) return
 
-        const words = this.getParaWords(this.selectParaIdx)
-        if (words.length === 0) return
-        this.selectWordIdx = Math.max(0, Math.min(this.selectWordIdx, words.length - 1))
+        if (this.visualMode && this.selectionAnchor) {
+            // Visual mode: highlight full range between anchor and cursor
+            this.clearAllSelectionHighlights()
+            const { sp, sw, ep, ew } = this.getSelectionRange()
 
-        // Offset: chapter label + chapter title + separator = 3 nodes before paragraphs
-        const nodeIdx = this.selectParaIdx + 3
-        const node = this.chapterTextNodes[nodeIdx]
-        if (!node) return
+            for (let pi = sp; pi <= ep; pi++) {
+                const words = this.getParaWords(pi)
+                if (words.length === 0) continue
+                const para = chapter.paragraphs[pi]
+                if (!para) continue
 
-        // Build styled text with the selected word highlighted via OpenTUI's bg/fg
-        const before = words.slice(0, this.selectWordIdx).join(" ")
-        const highlighted = words[this.selectWordIdx]!
-        const after = words.slice(this.selectWordIdx + 1).join(" ")
+                const nodeIdx = pi + 3
+                const node = this.chapterTextNodes[nodeIdx]
+                if (!node) continue
 
-        const prefix = before ? before + " " : ""
-        const suffix = after ? " " + after : ""
+                const wStart = (pi === sp) ? sw : 0
+                const wEnd = (pi === ep) ? Math.min(ew, words.length - 1) : words.length - 1
 
+                const beforeParts: string[] = []
+                const highlightedParts: string[] = []
+                const afterParts: string[] = []
+
+                for (let wi = 0; wi < words.length; wi++) {
+                    if (wi < wStart) beforeParts.push(words[wi]!)
+                    else if (wi <= wEnd) highlightedParts.push(words[wi]!)
+                    else afterParts.push(words[wi]!)
+                }
+
+                const prefix = beforeParts.length > 0 ? beforeParts.join(" ") + " " : ""
+                const highlighted = highlightedParts.join(" ")
+                const suffix = afterParts.length > 0 ? " " + afterParts.join(" ") : ""
+
+                this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix)
+            }
+        } else {
+            // Select mode: single word cursor
+            const words = this.getParaWords(this.selectParaIdx)
+            if (words.length === 0) return
+            this.selectWordIdx = Math.max(0, Math.min(this.selectWordIdx, words.length - 1))
+
+            const para = chapter.paragraphs[this.selectParaIdx]
+            if (!para) return
+            const nodeIdx = this.selectParaIdx + 3
+            const node = this.chapterTextNodes[nodeIdx]
+            if (!node) return
+
+            const prefix = this.selectWordIdx > 0 ? words.slice(0, this.selectWordIdx).join(" ") + " " : ""
+            const highlighted = words[this.selectWordIdx]!
+            const suffix = this.selectWordIdx < words.length - 1 ? " " + words.slice(this.selectWordIdx + 1).join(" ") : ""
+
+            this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix)
+        }
+
+        // Scroll to keep cursor visible
+        const estimatedLine = this.selectParaIdx * 2
+        this.readingPane.scrollTo(Math.max(0, estimatedLine - 5))
+    }
+
+    private applyHighlightToNode(node: any, para: any, th: any, prefix: string, highlighted: string, suffix: string) {
         switch (para.type) {
             case "heading":
                 node.content = t`\n\n${fg(th.text.body)(prefix)}${bold(bg(th.accent.amber)(fg(th.bg.void)(highlighted)))}${fg(th.text.body)(suffix)}\n`
@@ -961,10 +1045,14 @@ export class ReaderView {
                 node.content = t`\n${fg(th.text.body)(prefix)}${bold(bg(th.accent.amber)(fg(th.bg.void)(highlighted)))}${fg(th.text.body)(suffix)}\n`
                 break
         }
+    }
 
-        // Scroll to keep the selected paragraph visible
-        const estimatedLine = this.selectParaIdx * 2
-        this.readingPane.scrollTo(Math.max(0, estimatedLine - 5))
+    private clearAllSelectionHighlights() {
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter) return
+        for (let i = 0; i < chapter.paragraphs.length; i++) {
+            this.restoreParagraph(i)
+        }
     }
 
     private restoreParagraph(paraIdx: number) {
@@ -1015,20 +1103,18 @@ export class ReaderView {
     }
 
     private confirmSelect() {
-        const words = this.getParaWords(this.selectParaIdx)
-        const word = words[this.selectWordIdx] || ""
-        const clean = word.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, "")
+        const selected = this.getSelectedText()
+        const clean = selected.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, "")
         if (clean) {
             this.lastSelectedText = clean
-            showToast(this.renderer, `✎ "${clean}" selected — press D for dictionary`, "success")
+            showToast(this.renderer, `✎ "${clean.slice(0, 40)}" selected — press D for dictionary`, "success")
         }
         this.exitSelectMode()
     }
 
     private confirmSelectAndDict() {
-        const words = this.getParaWords(this.selectParaIdx)
-        const word = words[this.selectWordIdx] || ""
-        const clean = word.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, "")
+        const selected = this.getSelectedText()
+        const clean = selected.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, "")
         this.exitSelectMode()
         if (clean) {
             this.showDictionary(clean)
@@ -1038,28 +1124,23 @@ export class ReaderView {
     private highlightSelectedText() {
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter) return
-        const para = chapter.paragraphs[this.selectParaIdx]
-        if (!para || !para.text) return
 
-        // Save the full paragraph text as a highlight
+        const selectedText = this.getSelectedText()
+        if (!selectedText) return
+
+        const { sp } = this.getSelectionRange()
+
         addHighlight(
             this.book.id,
             this.currentChapter,
-            this.selectParaIdx,
-            para.text,
+            sp,
+            selectedText,
             "yellow",
         )
 
-        // Visually mark the paragraph with a yellow/amber bg and leave select mode
-        const th = getTheme()
-        const nodeIdx = this.selectParaIdx + 3
-        const node = this.chapterTextNodes[nodeIdx]
-        if (node) {
-            node.bg = th.accent.amber + "30" // semi-transparent amber (hex + alpha)
-        }
-
-        showToast(this.renderer, `📌 Highlighted: "${para.text.slice(0, 30)}..."`, "success")
+        showToast(this.renderer, `📌 Highlighted: "${selectedText.slice(0, 35)}${selectedText.length > 35 ? "…" : ""}"`, "success")
         this.exitSelectMode()
+        this.renderChapter()
     }
 
     // ── Cleanup ─────────────────────────────────────────────────
