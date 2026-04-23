@@ -74,7 +74,7 @@ export class StatusBar {
                 break
             case "select":
                 this.leftText.content = t`${bold(fg(theme.accent.amber)("✎ SELECT"))}`
-                this.rightText.content = t`${fg(theme.text.subtle)("h/l Word · j/k Para · ⏎ Select · D Dict · Esc Exit")}`
+                this.rightText.content = t`${fg(theme.text.subtle)("h/l Word · j/k Para · ⏎ Select · m Highlight · D Dict · Esc Exit")}`
                 break
             case "stats":
                 this.rightText.content = t`${fg(theme.text.subtle)("q Back · ← → Week")}`

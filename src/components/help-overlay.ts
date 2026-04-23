@@ -89,7 +89,7 @@ export class HelpOverlay {
                     ["B", "View bookmarks"],
                     ["t", "Chapter list (TOC)"],
                     ["/", "Search in book"],
-                    ["s", "Select mode (pick a word)"],
+                    ["s", "Select mode (pick word / highlight)"],
                     ["D", "Dictionary (select text + D)"],
                     ["E", "Export to Obsidian/Logseq"],
                     ["q", "Back to library"],

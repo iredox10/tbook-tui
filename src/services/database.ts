@@ -37,6 +37,17 @@ export interface ReadingStatRecord {
     minutes_read: number
 }
 
+export interface HighlightRecord {
+    id: number
+    book_id: number
+    chapter: number
+    paragraph_index: number
+    text: string
+    color: string
+    note: string
+    created_at: string
+}
+
 let db: Database
 
 /**
@@ -92,6 +103,19 @@ export function getDb(): Database {
       words_read INTEGER DEFAULT 0,
       minutes_read INTEGER DEFAULT 0,
       UNIQUE(book_id, date)
+    )
+  `)
+
+    db.run(`
+    CREATE TABLE IF NOT EXISTS highlights (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+      chapter INTEGER NOT NULL,
+      paragraph_index INTEGER NOT NULL DEFAULT 0,
+      text TEXT NOT NULL,
+      color TEXT DEFAULT 'yellow',
+      note TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now'))
     )
   `)
 
@@ -246,4 +270,35 @@ export function getTotalStats(): { books_read: number; total_words: number; stre
     }
 
     return { books_read: booksRead, total_words: totalWords, streak }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Highlights
+// ─────────────────────────────────────────────────────────────
+
+export function getHighlights(bookId: number): HighlightRecord[] {
+    const db = getDb()
+    return db.query(
+        "SELECT * FROM highlights WHERE book_id = ? ORDER BY chapter, paragraph_index, created_at"
+    ).all(bookId) as HighlightRecord[]
+}
+
+export function getChapterHighlights(bookId: number, chapter: number): HighlightRecord[] {
+    const db = getDb()
+    return db.query(
+        "SELECT * FROM highlights WHERE book_id = ? AND chapter = ? ORDER BY paragraph_index"
+    ).all(bookId, chapter) as HighlightRecord[]
+}
+
+export function addHighlight(bookId: number, chapter: number, paragraphIndex: number, text: string, color: string = "yellow", note: string = ""): void {
+    const db = getDb()
+    db.run(
+        "INSERT INTO highlights (book_id, chapter, paragraph_index, text, color, note) VALUES (?, ?, ?, ?, ?, ?)",
+        [bookId, chapter, paragraphIndex, text, color, note],
+    )
+}
+
+export function removeHighlight(id: number): void {
+    const db = getDb()
+    db.run("DELETE FROM highlights WHERE id = ?", [id])
 }

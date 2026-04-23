@@ -13,7 +13,7 @@ import {
 import { theme, truncate, progressBar, progressColor, formatDuration, getActiveTheme, setActiveTheme, getTheme } from "../utils/theme"
 import { parseEpub, type ParsedBook, type Chapter } from "../services/epub-parser"
 import { parsePdf } from "../services/pdf-parser"
-import { getBookById, updateReadingProgress, addBookmark, recordReading, type BookRecord } from "../services/database"
+import { getBookById, updateReadingProgress, addBookmark, recordReading, addHighlight, getHighlights, getChapterHighlights, type BookRecord, type HighlightRecord } from "../services/database"
 import { StatusBar } from "../components/status-bar"
 import { showToast } from "../components/toast"
 import { HelpOverlay } from "../components/help-overlay"
@@ -400,6 +400,16 @@ export class ReaderView {
             this.chapterTextNodes.push(node)
         }
 
+        // Apply saved highlights from database
+        const highlights = getChapterHighlights(this.book.id, this.currentChapter)
+        for (const hl of highlights) {
+            const nodeIdx = hl.paragraph_index + 3 // 3 fixed nodes before paragraphs
+            const node = this.chapterTextNodes[nodeIdx]
+            if (node) {
+                node.bg = th.accent.amber + "30" // semi-transparent amber tint
+            }
+        }
+
         // Scroll to top of new chapter
         this.readingPane.scrollTo(0)
 
@@ -610,6 +620,10 @@ export class ReaderView {
                     case "D":
                     case "d": // dictionary with selected word
                         this.confirmSelectAndDict()
+                        return true
+                    case "m": // mark/highlight current paragraph
+                    case "M":
+                        this.highlightSelectedText()
                         return true
                 }
                 return true // consume all other input in select mode
@@ -834,7 +848,7 @@ export class ReaderView {
         }
 
         this.statusBar.setMode("select")
-        showToast(this.renderer, "✎ SELECT MODE — h/l word · j/k para · Enter select · D dict · Esc exit", "info")
+        showToast(this.renderer, "✎ SELECT — h/l word · j/k para · ⏎ select · m highlight · D dict · Esc exit", "info")
         this.highlightCurrentWord()
     }
 
@@ -1019,6 +1033,33 @@ export class ReaderView {
         if (clean) {
             this.showDictionary(clean)
         }
+    }
+
+    private highlightSelectedText() {
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter) return
+        const para = chapter.paragraphs[this.selectParaIdx]
+        if (!para || !para.text) return
+
+        // Save the full paragraph text as a highlight
+        addHighlight(
+            this.book.id,
+            this.currentChapter,
+            this.selectParaIdx,
+            para.text,
+            "yellow",
+        )
+
+        // Visually mark the paragraph with a yellow/amber bg and leave select mode
+        const th = getTheme()
+        const nodeIdx = this.selectParaIdx + 3
+        const node = this.chapterTextNodes[nodeIdx]
+        if (node) {
+            node.bg = th.accent.amber + "30" // semi-transparent amber (hex + alpha)
+        }
+
+        showToast(this.renderer, `📌 Highlighted: "${para.text.slice(0, 30)}..."`, "success")
+        this.exitSelectMode()
     }
 
     // ── Cleanup ─────────────────────────────────────────────────

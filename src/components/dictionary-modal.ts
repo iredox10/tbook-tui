@@ -19,6 +19,7 @@ export class DictionaryModal {
     private visible = false
     private resultNodes: TextRenderable[] = []
     private onClose: () => void
+    private inputHandler: ((seq: string) => boolean) | null = null
 
     constructor(renderer: CliRenderer, onClose: () => void) {
         this.renderer = renderer
@@ -121,15 +122,16 @@ export class DictionaryModal {
             this.doLookup(this.input.value)
         })
 
-        // Input handler
-        this.renderer.addInputHandler((seq: string) => {
+        // Input handler — prepend for high priority (runs before reader's handler)
+        this.inputHandler = (seq: string) => {
             if (!this.visible) return false
             if (seq === "\x1b") {
                 this.hide()
                 return true
             }
             return false
-        })
+        }
+        this.renderer.prependInputHandler(this.inputHandler)
     }
 
     private async doLookup(word: string) {
@@ -225,6 +227,10 @@ export class DictionaryModal {
     hide() {
         if (!this.visible) return
         this.visible = false
+        if (this.inputHandler) {
+            this.renderer.removeInputHandler(this.inputHandler)
+            this.inputHandler = null
+        }
         try { this.renderer.root.remove(this.container.id) } catch { }
         this.onClose()
     }
