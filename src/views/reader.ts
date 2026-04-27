@@ -13,7 +13,6 @@ import {
 import { theme, truncate, progressBar, progressColor, formatDuration, getActiveTheme, setActiveTheme, getTheme } from "../utils/theme"
 import { parseEpub, type ParsedBook, type Chapter } from "../services/epub-parser"
 import { parsePdf } from "../services/pdf-parser"
-import { highlightCode } from "../utils/syntax-highlight"
 import { formatTable } from "../utils/html-to-text"
 import { getBookById, updateReadingProgress, addBookmark, recordReading, addHighlight, getHighlights, getChapterHighlights, addToVocabulary, type BookRecord, type HighlightRecord } from "../services/database"
 import { StatusBar } from "../components/status-bar"
@@ -288,6 +287,24 @@ export class ReaderView {
         }
     }
 
+    private formatCodeBlock(code: string, language?: string): string {
+        const lines = code.split("\n")
+        const lineNumWidth = String(lines.length).length
+        const numberedLines = lines.map((line, idx) => {
+            const num = String(idx + 1).padStart(lineNumWidth)
+            return `  ${num} │ ${line}`
+        }).join("\n")
+
+        const label = language && language !== "text" ? ` ${language} ` : ""
+        const ruleWidth = Math.max(18, 34 - label.length)
+        const topBar = label
+            ? `\n  ╭${"─".repeat(2)}${label}${"─".repeat(ruleWidth)}`
+            : `\n  ╭${"─".repeat(38)}`
+        const botBar = `  ╰${"─".repeat(38)}`
+
+        return `${topBar}\n${numberedLines}\n${botBar}\n`
+    }
+
     // ── Chapter rendering ───────────────────────────────────────
 
     private renderChapter() {
@@ -388,25 +405,11 @@ export class ReaderView {
                 }
 
                 case "code": {
-                    const lang = p.language || "text"
-                    const langLabel = lang !== "text" ? ` ${lang} ` : ""
-                    const highlighted = highlightCode(p.text, lang)
-                    const codeLines = highlighted.split("\n")
-                    const lineNumWidth = String(codeLines.length).length
-                    const numberedLines = codeLines.map((line, idx) => {
-                        const num = String(idx + 1).padStart(lineNumWidth)
-                        return `  \x1b[90m${num} │\x1b[0m ${line}`
-                    }).join("\n")
-
-                    const topBar = langLabel
-                        ? `\n  \x1b[90m╭${"─".repeat(4)}\x1b[33m${langLabel}\x1b[90m${"─".repeat(Math.max(1, 30 - langLabel.length))}\x1b[0m`
-                        : `\n  \x1b[90m╭${"─".repeat(35)}\x1b[0m`
-                    const botBar = `  \x1b[90m╰${"─".repeat(35)}\x1b[0m`
-
                     node = new TextRenderable(this.renderer, {
                         id: `para-${i}`,
                         ...textProps,
-                        content: `${topBar}\n${numberedLines}\n${botBar}\n`,
+                        content: this.formatCodeBlock(p.text, p.language),
+                        fg: th.text.body,
                     })
                     break
                 }
@@ -1242,20 +1245,8 @@ export class ReaderView {
                 break
             }
             case "code": {
-                const lang = para.language || "text"
-                const langLabel = lang !== "text" ? ` ${lang} ` : ""
-                const highlighted = highlightCode(para.text, lang)
-                const codeLines = highlighted.split("\n")
-                const lineNumWidth = String(codeLines.length).length
-                const numberedLines = codeLines.map((line: string, idx: number) => {
-                    const num = String(idx + 1).padStart(lineNumWidth)
-                    return `  \x1b[90m${num} │\x1b[0m ${line}`
-                }).join("\n")
-                const topBar = langLabel
-                    ? `\n  \x1b[90m╭${"─".repeat(4)}\x1b[33m${langLabel}\x1b[90m${"─".repeat(Math.max(1, 30 - langLabel.length))}\x1b[0m`
-                    : `\n  \x1b[90m╭${"─".repeat(35)}\x1b[0m`
-                const botBar = `  \x1b[90m╰${"─".repeat(35)}\x1b[0m`
-                node.content = `${topBar}\n${numberedLines}\n${botBar}\n`
+                node.content = this.formatCodeBlock(para.text, para.language)
+                node.fg = th.text.body
                 break
             }
             case "table": {
