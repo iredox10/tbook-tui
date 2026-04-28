@@ -29,6 +29,8 @@ export class LibraryView {
     private cardRenderables: BoxRenderable[] = []
     private helpOverlay: HelpOverlay | null = null
     private helpOpen = false
+    private inputHandler?: (sequence: string) => boolean
+
     constructor(renderer: CliRenderer, app: App) {
         this.renderer = renderer
         this.app = app
@@ -145,10 +147,16 @@ export class LibraryView {
         this.renderBookCards()
 
         // ── Input handler ──
-        this.renderer.addInputHandler((sequence: string) => {
+        this.inputHandler = (sequence: string) => {
+            if (this.helpOpen) return false
+
             if (this.searchMode) {
                 if (sequence === "\x1b" || sequence === "\x1b\x1b") {
                     // Escape — exit search
+                    this.toggleSearch(false)
+                    return true
+                }
+                if (sequence === "q" && !this.searchInput?.focused) {
                     this.toggleSearch(false)
                     return true
                 }
@@ -188,7 +196,8 @@ export class LibraryView {
                     return true
             }
             return false
-        })
+        }
+        this.renderer.addInputHandler(this.inputHandler)
 
         // Focus the list area
         this.bookList.focus()
@@ -374,6 +383,9 @@ export class LibraryView {
     }
 
     destroy() {
+        if (this.inputHandler) {
+            this.renderer.removeInputHandler(this.inputHandler)
+        }
         this.helpOverlay?.destroy()
         this.statusBar.destroy()
         try { this.renderer.root.remove(this.container.id) } catch { }

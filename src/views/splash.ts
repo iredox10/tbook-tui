@@ -11,6 +11,7 @@ import {
 import { theme } from "../utils/theme"
 import { getAllBooks } from "../services/database"
 import type { App } from "../app"
+import { HelpOverlay } from "../components/help-overlay"
 
 export class SplashView {
     private renderer: CliRenderer
@@ -18,6 +19,8 @@ export class SplashView {
     private container!: BoxRenderable
     private menu!: SelectRenderable
     private removeHandler?: () => void
+    private helpOverlay?: HelpOverlay
+    private modalOpen = false
 
     constructor(renderer: CliRenderer, app: App) {
         this.renderer = renderer
@@ -126,19 +129,37 @@ export class SplashView {
 
         // Handle quit
         const handler = (sequence: string) => {
+            if (this.modalOpen) return false
+
             if (sequence === "q") {
                 this.app.quit()
+                return true
+            }
+            if (sequence === "?") {
+                this.showHelp()
                 return true
             }
             return false
         }
         this.renderer.addInputHandler(handler)
         this.removeHandler = () => {
-            // OpenTUI doesn't expose removeInputHandler yet, but we track it
+            this.renderer.removeInputHandler(handler)
         }
     }
 
+    private showHelp() {
+        if (this.modalOpen) return
+        this.modalOpen = true
+        this.helpOverlay = new HelpOverlay(this.renderer, () => {
+            this.modalOpen = false
+            this.menu.focus()
+        })
+        this.helpOverlay.show()
+    }
+
     destroy() {
+        if (this.removeHandler) this.removeHandler()
+        this.helpOverlay?.destroy()
         try {
             this.renderer.root.remove(this.container.id)
         } catch { }

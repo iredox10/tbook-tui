@@ -77,6 +77,8 @@ export class ReaderView {
     private lastSelectedText = ""
     private focusMode = false
 
+    private inputHandler?: (sequence: string) => boolean
+
     // Inline select mode / visual mode
     private selectMode = false
     private visualMode = false  // true = extending a selection range
@@ -656,7 +658,7 @@ export class ReaderView {
     // ── Keybinds ────────────────────────────────────────────────
 
     private setupKeybinds() {
-        this.renderer.addInputHandler((sequence: string) => {
+        this.inputHandler = (sequence: string) => {
             // Block all reader input while a modal is open
             if (this.modalOpen) return false
 
@@ -839,7 +841,8 @@ export class ReaderView {
                     return true
             }
             return false
-        })
+        }
+        this.renderer.addInputHandler(this.inputHandler)
     }
 
     // ── Phase 3 Modal Launchers ──────────────────────────────────
@@ -1325,6 +1328,9 @@ export class ReaderView {
     // ── Cleanup ─────────────────────────────────────────────────
 
     destroy() {
+        if (this.inputHandler) {
+            this.renderer.removeInputHandler(this.inputHandler)
+        }
         this.recordSessionStats()
         this.stopAutoScroll()
         this.helpOverlay?.destroy()

@@ -38,6 +38,7 @@ export class ImportView {
     private selectedIndex = 0
     private scanning = false
     private cardRenderables: BoxRenderable[] = []
+    private inputHandler?: (sequence: string) => boolean
 
     constructor(renderer: CliRenderer, app: App) {
         this.renderer = renderer
@@ -165,7 +166,7 @@ export class ImportView {
         this.pathInput.focus()
 
         // ── Keybinds ──
-        this.renderer.addInputHandler((sequence: string) => {
+        this.inputHandler = (sequence: string) => {
             if (this.pathInput.focused) {
                 if (sequence === "\r" || sequence === "\n") {
                     this.scanDirectory(this.pathInput.value)
@@ -211,7 +212,8 @@ export class ImportView {
                     return true
             }
             return false
-        })
+        }
+        this.renderer.addInputHandler(this.inputHandler)
     }
 
     private async scanDirectory(dirPath: string) {
@@ -396,6 +398,9 @@ export class ImportView {
     }
 
     destroy() {
+        if (this.inputHandler) {
+            this.renderer.removeInputHandler(this.inputHandler)
+        }
         this.statusBar.destroy()
         try { this.renderer.root.remove(this.container.id) } catch { }
     }

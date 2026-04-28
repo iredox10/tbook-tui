@@ -19,7 +19,6 @@ export class App {
     private renderer: CliRenderer
     private currentView: ViewInstance | null = null
     private currentViewName: ViewName | null = null
-    private inputHandlers: ((seq: string) => boolean)[] = []
 
     constructor(renderer: CliRenderer) {
         this.renderer = renderer

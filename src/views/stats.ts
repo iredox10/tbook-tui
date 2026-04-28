@@ -17,6 +17,7 @@ export class StatsView {
     private app: App
     private container!: BoxRenderable
     private statusBar!: StatusBar
+    private inputHandler?: (sequence: string) => boolean
 
     constructor(renderer: CliRenderer, app: App) {
         this.renderer = renderer
@@ -148,16 +149,20 @@ export class StatsView {
         this.renderer.root.add(this.statusBar.root)
 
         // ── Keybinds ──
-        this.renderer.addInputHandler((sequence: string) => {
+        this.inputHandler = (sequence: string) => {
             if (sequence === "q") {
                 this.app.showLibrary()
                 return true
             }
             return false
-        })
+        }
+        this.renderer.addInputHandler(this.inputHandler)
     }
 
     destroy() {
+        if (this.inputHandler) {
+            this.renderer.removeInputHandler(this.inputHandler)
+        }
         this.statusBar.destroy()
         try { this.renderer.root.remove(this.container.id) } catch { }
     }
