@@ -145,6 +145,10 @@ export class SearchModal {
 
             // Navigate results when not focused on input
             if (!this.input.focused) {
+                if (seq === "q") {
+                    this.hide()
+                    return true
+                }
                 if (seq === "j" || seq === "\x1b[B") {
                     this.moveSelection(1)
                     return true

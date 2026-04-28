@@ -665,6 +665,7 @@ export class ReaderView {
                 switch (sequence) {
                     case "\x1b": // Escape — exit select mode
                     case "s":    // toggle off
+                    case "q":    // exit select mode
                         this.exitSelectMode()
                         return true
                     case "j":

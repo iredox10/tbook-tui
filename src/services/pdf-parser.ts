@@ -518,6 +518,75 @@ function detectNoteFromText(text: string): { kind: StyledParagraph["noteKind"]; 
     return { kind: "note", body }
 }
 
+function normalizeSpacedCaps(text: string): string {
+    let normalized = text.replace(/\s+([:;,.)\]])/g, "$1").replace(/([(\[])\s+/g, "$1").trim()
+
+    for (let i = 0; i < 4; i++) {
+        const next = normalized.replace(/\b([A-Z])\s+([A-Z]{2,})\b/g, "$1$2")
+        if (next === normalized) break
+        normalized = next
+    }
+
+    return normalized.replace(/\s+/g, " ").trim()
+}
+
+function trimInlineHeadingBody(text: string): string {
+    const match = text.match(/^(\d+(?:\.\d+)+|\d+\.)\s+(.+)$/)
+    if (!match) return text
+
+    const prefix = match[1]!
+    const rest = match[2]!.trim()
+    const phraseStarter = rest.match(/^(.+?)\s+(Of course|It turns out)\b.*$/)
+    if (phraseStarter) {
+        const candidate = `${prefix} ${phraseStarter[1]!.trim()}`
+        if (candidate.split(/\s+/).length <= 10) return candidate
+    }
+
+    const sentenceStarters = "The|This|These|That|Those|Our|We|Now|To|For|In|On|At|As|After|Before|Because|However|Unfortunately|Fortunately|Though|Although|But|And|Or|If|When|While|Since|Instead|Specifically|Interestingly|Underlying|Finally|First|Second|Third"
+    const inlineStarter = rest.match(new RegExp(`^(.+?)\\s+(${sentenceStarters})\\s+[a-z].*$`))
+    if (inlineStarter) {
+        const candidate = `${prefix} ${inlineStarter[1]!.trim()}`
+        if (candidate.split(/\s+/).length <= 10) return candidate
+    }
+
+    const tokens = rest.split(/\s+/)
+    const stopTokens = new Set([
+        "Figure", "Table", "Example", "Exercise", "Now", "Thus", "However", "Unfortunately",
+        "Fortunately", "Specifically", "Instead", "Remember", "To", "This", "These", "That",
+        "Those", "Our", "We", "In", "On", "At", "As", "After", "Before", "Because", "When",
+        "While", "Though", "Although", "But", "And", "Or", "If", "Since", "Interestingly",
+        "Underlying", "Finally", "First", "Second", "Third",
+    ])
+
+    const kept: string[] = []
+    for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i]!
+        const plain = token.replace(/[“”"'`,.;:!?()[\]{}]+/g, "")
+        const next = tokens[i + 1]?.replace(/[“”"'`,.;:!?()[\]{}]+/g, "") || ""
+
+        if (
+            kept.length >= 1 &&
+            stopTokens.has(plain) &&
+            (!next || /^[a-z]/.test(next) || /^\d/.test(next) || plain === "Figure" || plain === "Table")
+        ) {
+            break
+        }
+
+        kept.push(token)
+
+        if (kept.length >= 10 && /[.?!:]$/.test(token)) {
+            break
+        }
+    }
+
+    const candidate = `${prefix} ${kept.join(" ")}`.replace(/\s+/g, " ").trim()
+    return candidate.length >= prefix.length + 4 ? candidate : text
+}
+
+function sanitizeHeadingText(text: string): string {
+    return trimInlineHeadingBody(normalizeSpacedCaps(text))
+}
+
 function looksLikeSourceLineNumber(line: BboxLine, metrics: PdfMetrics): boolean {
     const text = line.compact.trim()
     if (!/^\d{1,3}$/.test(text)) return false
@@ -545,12 +614,19 @@ function filterInsetAsideBlocks(lines: BboxLine[], metrics: PdfMetrics): BboxLin
         const next = lines[i + 1] || null
 
         if (skippingAside) {
-            if (line.page !== asidePage || line.yMin - asideLastYMax > metrics.bodyLineHeight * 1.6) {
+            if (line.page !== asidePage || line.yMin - asideLastYMax > metrics.bodyLineHeight * 2.4) {
                 skippingAside = false
             } else {
                 asideLastYMax = Math.max(asideLastYMax, line.yMax)
                 continue
             }
+        }
+
+        if (/^A\s+SIDE\b|^ASIDE\b/i.test(line.compact)) {
+            skippingAside = true
+            asidePage = line.page
+            asideLastYMax = line.yMax
+            continue
         }
 
         if (
@@ -822,7 +898,7 @@ function linesToStyledParagraphs(lines: BboxLine[]): StyledParagraph[] {
         const heading = shouldTreatAsHeading(line, metrics)
         if (heading.isHeading && !looksLikeCodeLine(line, metrics) && !looksLikeTableLine(line)) {
             flushAll()
-            paragraphs.push({ type: "heading", text, level: heading.level })
+            paragraphs.push({ type: "heading", text: sanitizeHeadingText(text), level: heading.level })
             prev = line
             continue
         }
@@ -934,6 +1010,16 @@ function isLikelyTocParagraph(text: string): boolean {
     return false
 }
 
+function looksLikeTocishText(text: string): boolean {
+    const normalized = sanitizeHeadingText(text)
+    if (!normalized) return false
+    if (/^table of contents$/i.test(normalized)) return true
+    if (/\.{4,}\s*(?:\d+|[ivxlcdm]+)\s*$/i.test(normalized)) return true
+    if (/(references|homework|general index|asides|tips|cruces).*\b\d{1,4}\b/i.test(normalized)) return true
+    if (/^\d+(?:\.\d+)*\s+.+\b\d{1,4}\b$/.test(normalized) && normalized.length <= 140) return true
+    return false
+}
+
 function countWords(paragraphs: StyledParagraph[]): number {
     return paragraphs.reduce((sum, p) => sum + p.text.split(/\s+/).filter(Boolean).length, 0)
 }
@@ -956,23 +1042,36 @@ function looksLikeBibliographyHeading(text: string): boolean {
 }
 
 function looksLikeDiagramHeading(text: string): boolean {
+    text = normalizeSpacedCaps(text)
     if (!text) return false
+    if (/^(chapter|part|appendix|section)\s+\w+/i.test(text)) return false
+    if (/^\d+(?:\.\d+)+\s+[A-Z]/.test(text)) return false
     if (/^figure\b/i.test(text)) return true
     if (/^[.=0-9]/.test(text)) return true
     if (/^[A-Z]{1,4}$/.test(text)) return true
     if (/^\d+\s*(KB|MB|GB|TB|%|ms|us|ns)$/i.test(text)) return true
     if (/^[A-Z0-9 ]+$/.test(text) && text.length <= 6) return true
     if (/^[A-Z][a-z]+$/.test(text) && text.length <= 7) return true
+    if (
+        text.length <= 22 &&
+        text.split(/\s+/).length <= 2 &&
+        !/[.:?!]/.test(text) &&
+        /^[A-Za-z0-9 ]+$/.test(text)
+    ) {
+        return true
+    }
     return false
 }
 
 function headingPriority(text: string, level: number): number {
+    text = sanitizeHeadingText(text)
     if (looksLikeBibliographyHeading(text) || looksLikeDiagramHeading(text)) return -1
     if (/^(chapter|part|appendix)\s+\w+/i.test(text)) return 100
     if (/^\d+(?:\.\d+)+\s+[A-Z]/.test(text)) return 95
     if (/^\d+\.\s+[A-Z]/.test(text)) return 90
     if (/^section\s+\d+/i.test(text)) return 85
-    if (/T HE C RUX|CRUX/i.test(text)) return 70
+    if (/\bCRUX\b/i.test(text) && /:\s+\S.+\S/.test(text)) return 88
+    if (/\bCRUX\b/i.test(text)) return 25
     return Math.max(0, 40 - level * 4)
 }
 
@@ -980,7 +1079,7 @@ function chooseChapterTitle(paragraphs: StyledParagraph[], fallbackTitle: string
     const headings = paragraphs
         .filter((p) => p.type === "heading")
         .map((p) => ({
-            text: p.text.trim(),
+            text: sanitizeHeadingText(p.text.trim()),
             level: p.level || 3,
         }))
         .filter((p) => !!p.text)
@@ -1042,13 +1141,22 @@ function mergeBrokenParagraphs(paragraphs: StyledParagraph[]): StyledParagraph[]
 }
 
 function shouldSplitAtHeading(text: string, level: number, currentParagraphCount: number): boolean {
+    text = sanitizeHeadingText(text)
     if (currentParagraphCount < 10) return false
     if (looksLikeDiagramHeading(text)) return false
     if (looksLikeBibliographyHeading(text)) return false
     if (/^(chapter|part|appendix)\s+\w+/i.test(text)) return true
+    if (/\bCRUX\b/i.test(text) && currentParagraphCount >= 24) return true
     if (/^\d+(?:\.\d+)+\s+[A-Z]/.test(text) && currentParagraphCount >= 16) return true
     if (/^\d+\.\s+[A-Z]/.test(text) && currentParagraphCount >= 24) return true
-    if (level <= 2 && currentParagraphCount >= 60) return true
+    if (
+        level <= 2 &&
+        currentParagraphCount >= 60 &&
+        text.split(/\s+/).length >= 3 &&
+        text.length >= 18
+    ) {
+        return true
+    }
     return false
 }
 
@@ -1065,13 +1173,14 @@ function buildChaptersFromParagraphs(paragraphs: StyledParagraph[], fallbackTitl
             const text = p.text.trim()
             if (shouldSplitAtHeading(text, level, current.length)) {
                 chapters.push(makeChapter(chapters.length, currentTitle, current))
-                currentTitle = text || `Section ${chapters.length + 1}`
-                current = [p]
+                const headingText = sanitizeHeadingText(text)
+                currentTitle = headingText || `Section ${chapters.length + 1}`
+                current = [{ ...p, text: headingText || p.text }]
                 continue
             }
 
             if (current.length === 0 && level <= 2 && text) {
-                currentTitle = text
+                currentTitle = sanitizeHeadingText(text)
             }
         }
 
@@ -1103,6 +1212,26 @@ function buildChaptersFromParagraphs(paragraphs: StyledParagraph[], fallbackTitl
         order: idx,
         title: chooseChapterTitle(chapter.paragraphs, chapter.title),
     }))
+}
+
+function isLikelyFrontMatterChapter(chapter: Chapter): boolean {
+    const title = sanitizeHeadingText(chapter.title)
+    if (!title) return true
+    if (/^(preface|contents|table of contents)$/i.test(title)) return true
+    if (/^[. ]*c\s+\d{4}\b/i.test(title)) return true
+    if (/arpaci-dusseau books/i.test(title)) return true
+    if (looksLikeTocishText(title)) return true
+
+    const headings = chapter.paragraphs
+        .filter((p) => p.type === "heading")
+        .map((p) => sanitizeHeadingText(p.text || ""))
+        .filter(Boolean)
+        .slice(0, 8)
+
+    if (headings.length === 0) return false
+
+    const noisyHeadings = headings.filter(looksLikeTocishText).length
+    return noisyHeadings >= Math.max(2, Math.ceil(headings.length * 0.5))
 }
 
 function finalizeParagraphsForChapters(paragraphs: StyledParagraph[]): StyledParagraph[] {
@@ -1151,6 +1280,7 @@ function finalizeParagraphsForChapters(paragraphs: StyledParagraph[]): StyledPar
         }
 
         if (p.type === "heading") {
+            p.text = sanitizeHeadingText(text)
             if ((text.match(/\./g) || []).length >= 8 && text.replace(/[.\s]/g, "").length < 25) {
                 continue
             }
@@ -1491,6 +1621,20 @@ export async function parsePdf(filePath: string): Promise<ParsedBook> {
         totalWords = chapters.reduce((sum, ch) => sum + ch.wordCount, 0)
     }
 
+    if (
+        chapters.length > 1 &&
+        /^(contents|table of contents)$/i.test(chapters[0]!.title.trim())
+    ) {
+        chapters = chapters.slice(1).map((ch, idx) => ({ ...ch, id: `ch-${idx}`, order: idx }))
+        totalWords = chapters.reduce((sum, ch) => sum + ch.wordCount, 0)
+    }
+
+    while (chapters.length > 1 && isLikelyFrontMatterChapter(chapters[0]!)) {
+        chapters = chapters.slice(1).map((ch, idx) => ({ ...ch, id: `ch-${idx}`, order: idx }))
+    }
+
+    totalWords = chapters.reduce((sum, ch) => sum + ch.wordCount, 0)
+
     const metadataTitleLower = metadata.title.toLowerCase().trim()
     chapters = chapters
         .map((ch, idx) => ({ ...ch, id: `ch-${idx}`, order: idx }))
@@ -1498,6 +1642,7 @@ export async function parsePdf(filePath: string): Promise<ParsedBook> {
             if (idx === 0) return true
             const title = ch.title.toLowerCase().trim()
             if (!title) return false
+            if (title === "contents" || title === "table of contents") return false
             if (title === metadataTitleLower) return false
             return true
         })

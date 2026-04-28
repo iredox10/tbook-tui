@@ -126,18 +126,31 @@ export class DictionaryModal {
         // Input handler — prepend for high priority (runs before reader's handler)
         this.inputHandler = (seq: string) => {
             if (!this.visible) return false
-            if (seq === "\x1b" || seq === "\x1b\x1b" || seq === "q") {
+            if (seq === "\x1b" || seq === "\x1b\x1b" || (seq === "q" && !this.input.focused)) {
                 this.hide()
                 return true
             }
-            // Scroll results with j/k
-            if (seq === "j" || seq === "\x1b[B") {
-                this.resultBox.scrollBy(1)
+
+            if (seq === "\t") {
+                if (this.input.focused) {
+                    this.input.blur()
+                    this.resultBox.focus()
+                } else {
+                    this.input.focus()
+                }
                 return true
             }
-            if (seq === "k" || seq === "\x1b[A") {
-                this.resultBox.scrollBy(-1)
-                return true
+
+            if (!this.input.focused) {
+                // Scroll results with j/k or arrows
+                if (seq === "j" || seq === "\x1b[B") {
+                    this.resultBox.scrollBy(1)
+                    return true
+                }
+                if (seq === "k" || seq === "\x1b[A") {
+                    this.resultBox.scrollBy(-1)
+                    return true
+                }
             }
             return false
         }
