@@ -320,10 +320,38 @@ export class LibraryView {
         return card
     }
 
+    private scrollToSelected() {
+        if (this.filteredBooks.length === 0) return
+        
+        // Calculate position based on the known fixed sizes
+        const cardHeight = 4
+        const gap = 1
+        const paddingTop = 2
+        
+        const cardTop = paddingTop + this.selectedIndex * (cardHeight + gap)
+        const cardBottom = cardTop + cardHeight
+        
+        const currentScroll = this.bookList.scrollTop
+        const viewportHeight = this.bookList.viewport?.height || this.bookList.height || 20
+        
+        if (viewportHeight <= 0) {
+            // Layout not ready yet, just scroll blindly
+            this.bookList.scrollTo(Math.max(0, cardTop - 2))
+            return
+        }
+
+        if (cardTop < currentScroll) {
+            this.bookList.scrollTo(cardTop)
+        } else if (cardBottom > currentScroll + viewportHeight) {
+            this.bookList.scrollTo(cardBottom - viewportHeight)
+        }
+    }
+
     private moveSelection(delta: number) {
         if (this.filteredBooks.length === 0) return
         this.selectedIndex = Math.max(0, Math.min(this.filteredBooks.length - 1, this.selectedIndex + delta))
         this.renderBookCards()
+        this.scrollToSelected()
     }
 
     private openSelectedBook() {
@@ -343,6 +371,7 @@ export class LibraryView {
             this.filteredBooks = [...this.books]
             this.selectedIndex = 0
             this.renderBookCards()
+            this.scrollToSelected()
             this.bookList.focus()
         }
     }
@@ -358,6 +387,7 @@ export class LibraryView {
         }
         this.selectedIndex = 0
         this.renderBookCards()
+        this.scrollToSelected()
     }
 
     private deleteSelectedBook() {
@@ -369,6 +399,7 @@ export class LibraryView {
         this.filteredBooks = [...this.books]
         this.selectedIndex = Math.min(this.selectedIndex, this.filteredBooks.length - 1)
         this.renderBookCards()
+        this.scrollToSelected()
         this.statusBar.setLibraryInfo(this.books.length)
         showToast(this.renderer, `🗑 Deleted: ${truncate(book.title, 25)}`, "info")
     }
