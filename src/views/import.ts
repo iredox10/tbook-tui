@@ -25,6 +25,7 @@ interface FoundFile {
     size: string
     format: "epub" | "pdf"
     alreadyImported: boolean
+    selected: boolean
 }
 
 export class ImportView {
@@ -38,6 +39,7 @@ export class ImportView {
     private selectedIndex = 0
     private scanning = false
     private cardRenderables: BoxRenderable[] = []
+    private selectedForBatch: Set<string> = new Set()
     private inputHandler?: (sequence: string) => boolean
 
     constructor(renderer: CliRenderer, app: App) {
@@ -152,7 +154,7 @@ export class ImportView {
         // Override the right text with import-specific hints
         const importHint = new TextRenderable(this.renderer, {
             id: "import-hint",
-            content: t`${fg(theme.text.subtle)("⏎ Scan · ↑↓ Select · a Import All · ⏎ Import Selected · q Back")}`,
+            content: t`${fg(theme.text.subtle)("⏎ Scan · ↑↓ Navigate · Space Toggle · ⏎ Import · a Import All · A Batch · q Back")}`,
         })
         this.statusBar.root.add(importHint)
 
@@ -197,12 +199,18 @@ export class ImportView {
                 case "\x1b[A":
                     this.moveSelection(-1)
                     return true
+                case " ":
+                    this.toggleSelection()
+                    return true
                 case "\r":
                 case "\n":
                     this.importSelected()
                     return true
                 case "a":
                     this.importAll()
+                    return true
+                case "A":
+                    this.importBatch()
                     return true
                 case "/":
                     this.pathInput.focus()
@@ -272,7 +280,7 @@ export class ImportView {
                     } else {
                         const ext = extname(entry).toLowerCase()
                         if (ext === ".epub" || ext === ".pdf") {
-                            const format = ext === ".epub" ? "epub" : "pdf" as const
+            const format = ext === ".epub" ? "epub" : "pdf" as const
                             const sizeMB = (stat.size / (1024 * 1024)).toFixed(1)
                             const alreadyImported = !!getBookByPath(fullPath)
                             this.files.push({
@@ -281,6 +289,7 @@ export class ImportView {
                                 size: `${sizeMB}MB`,
                                 format,
                                 alreadyImported,
+                                selected: false,
                             })
                         }
                     }
@@ -295,52 +304,123 @@ export class ImportView {
         }
         this.cardRenderables = []
 
-        for (let i = 0; i < this.files.length; i++) {
-            const file = this.files[i]!
-            const isSelected = i === this.selectedIndex
+        if (this.files.length === 0) {
+            const empty = new BoxRenderable(this.renderer, {
+                id: "import-empty",
+                width: "100%",
+                height: 3,
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+            })
+            empty.add(new TextRenderable(this.renderer, {
+                id: "import-empty-msg",
+                content: "Press Enter to scan for books",
+                fg: theme.text.muted,
+            }))
+            this.fileList.add(empty)
+            this.cardRenderables.push(empty)
+            return
+        }
 
-            const row = new BoxRenderable(this.renderer, {
-                id: `file-row-${i}`,
+        // Group by format
+        const epubs = this.files.filter(f => f.format === "epub")
+        const pdfs = this.files.filter(f => f.format === "pdf")
+
+        const renderGroup = (group: FoundFile[], label: string, color: string) => {
+            if (group.length === 0) return
+
+            // Section header
+            const header = new BoxRenderable(this.renderer, {
+                id: `import-header-${label}`,
+                width: "100%",
+                height: 1,
+                flexDirection: "row",
+                paddingLeft: 1,
+                paddingTop: 1,
+                paddingBottom: 0,
+                gap: 1,
+            })
+            header.add(new TextRenderable(this.renderer, {
+                id: `import-header-text-${label}`,
+                content: t`${fg(color)(label.toUpperCase())} ${fg(theme.text.muted)(`(${group.length})`)}`,
+            }))
+            this.fileList.add(header)
+            this.cardRenderables.push(header)
+
+            for (let gi = 0; gi < group.length; gi++) {
+                const file = group[gi]!
+                const i = this.files.indexOf(file)
+                const isSelected = i === this.selectedIndex
+                const isBatch = this.selectedForBatch.has(file.path)
+
+                const row = new BoxRenderable(this.renderer, {
+                    id: `file-row-${i}`,
+                    width: "100%",
+                    height: 2,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    paddingLeft: 2,
+                    gap: 2,
+                    backgroundColor: isSelected ? theme.bg.hover : "transparent",
+                })
+
+                const indicator = new TextRenderable(this.renderer, {
+                    id: `file-ind-${i}`,
+                    content: isSelected ? t`${fg(theme.accent.green)("▸")}` : (isBatch ? t`${fg(theme.accent.cyan)("☑")}` : " "),
+                })
+
+                const formatBadge = new TextRenderable(this.renderer, {
+                    id: `file-fmt-${i}`,
+                    content: t`${fg(file.format === "pdf" ? theme.accent.orange : theme.accent.purple)(file.format.toUpperCase())}`,
+                })
+
+                const name = new TextRenderable(this.renderer, {
+                    id: `file-name-${i}`,
+                    content: t`${fg(file.alreadyImported
+                        ? theme.text.subtle
+                        : isSelected ? theme.accent.green : theme.text.body
+                    )(truncate(file.name, 36))}`,
+                })
+
+                const meta = new TextRenderable(this.renderer, {
+                    id: `file-meta-${i}`,
+                    content: t`${fg(theme.text.subtle)(file.size)}${file.alreadyImported
+                        ? fg(theme.text.subtle)(" ✓")
+                        : isBatch ? fg(theme.accent.cyan)(" batch")
+                        : ""}`,
+                })
+
+                row.add(indicator)
+                row.add(formatBadge)
+                row.add(name)
+                row.add(meta)
+                this.fileList.add(row)
+                this.cardRenderables.push(row)
+            }
+        }
+
+        renderGroup(epubs, "epub", theme.accent.purple)
+        renderGroup(pdfs, "pdf", theme.accent.orange)
+
+        // Batch summary if selections exist
+        if (this.selectedForBatch.size > 0) {
+            const batchRow = new BoxRenderable(this.renderer, {
+                id: "import-batch-summary",
                 width: "100%",
                 height: 2,
                 flexDirection: "row",
                 alignItems: "center",
                 paddingLeft: 2,
-                gap: 2,
-                backgroundColor: isSelected ? theme.bg.hover : "transparent",
+                gap: 1,
+                backgroundColor: theme.bg.hover,
             })
-
-            const indicator = new TextRenderable(this.renderer, {
-                id: `file-ind-${i}`,
-                content: isSelected ? t`${fg(theme.accent.green)("▸")}` : " ",
-            })
-
-            const formatBadge = new TextRenderable(this.renderer, {
-                id: `file-fmt-${i}`,
-                content: t`${fg(file!.format === "pdf" ? theme.accent.orange : theme.accent.purple)(file!.format.toUpperCase())}`,
-            })
-
-            const name = new TextRenderable(this.renderer, {
-                id: `file-name-${i}`,
-                content: t`${fg(file.alreadyImported
-                    ? theme.text.subtle
-                    : isSelected ? theme.accent.green : theme.text.body
-                )(truncate(file.name, 40))}`,
-            })
-
-            const meta = new TextRenderable(this.renderer, {
-                id: `file-meta-${i}`,
-                content: t`${fg(theme.text.subtle)(file.size)}${file.alreadyImported
-                    ? fg(theme.text.subtle)(" ✓ imported")
-                    : ""}`,
-            })
-
-            row.add(indicator)
-            row.add(formatBadge)
-            row.add(name)
-            row.add(meta)
-            this.fileList.add(row)
-            this.cardRenderables.push(row)
+            batchRow.add(new TextRenderable(this.renderer, {
+                id: "import-batch-text",
+                content: t`${fg(theme.accent.cyan)("☑")} ${fg(theme.text.body)(`${this.selectedForBatch.size} selected — press A to import batch`)}`,
+            }))
+            this.fileList.add(batchRow)
+            this.cardRenderables.push(batchRow)
         }
     }
 
@@ -375,6 +455,37 @@ export class ImportView {
             await this.importFile(file)
         }
         showToast(this.renderer, `Imported ${toImport.length} book(s)`, "success")
+    }
+
+    private toggleSelection() {
+        if (this.files.length === 0) return
+        const file = this.files[this.selectedIndex]
+        if (!file || file.alreadyImported) return
+
+        if (this.selectedForBatch.has(file.path)) {
+            this.selectedForBatch.delete(file.path)
+            showToast(this.renderer, `Deselected: ${truncate(file.name, 25)}`, "info")
+        } else {
+            this.selectedForBatch.add(file.path)
+            showToast(this.renderer, `Selected: ${truncate(file.name, 25)}`, "success")
+        }
+        this.renderFileList()
+    }
+
+    private async importBatch() {
+        if (this.selectedForBatch.size === 0) {
+            showToast(this.renderer, "No files selected. Press Space to select.", "warning")
+            return
+        }
+        const toImport = this.files.filter(f => this.selectedForBatch.has(f.path) && !f.alreadyImported)
+        let count = 0
+        for (const file of toImport) {
+            await this.importFile(file)
+            count++
+        }
+        this.selectedForBatch.clear()
+        showToast(this.renderer, `Imported ${count} book(s)`, "success")
+        this.renderFileList()
     }
 
     private async importFile(file: FoundFile) {

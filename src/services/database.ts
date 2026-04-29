@@ -252,6 +252,19 @@ export function getWeeklyStats(): ReadingStatRecord[] {
     ).all(sevenDaysAgo) as ReadingStatRecord[]
 }
 
+export function getWeeklyStatsOffset(daysOffset: number): ReadingStatRecord[] {
+    const db = getDb()
+    const start = new Date(Date.now() - (7 + daysOffset) * 86400000).toISOString().slice(0, 10)
+    const end = new Date(Date.now() - daysOffset * 86400000).toISOString().slice(0, 10)
+    return db.query(
+        `SELECT date, SUM(words_read) as words_read, SUM(minutes_read) as minutes_read
+     FROM reading_stats
+     WHERE date >= ? AND date < ?
+     GROUP BY date
+     ORDER BY date ASC`
+    ).all(start, end) as ReadingStatRecord[]
+}
+
 export function getTotalStats(): { books_read: number; total_words: number; streak: number } {
     const db = getDb()
     const booksRead = (db.query(

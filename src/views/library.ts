@@ -254,6 +254,15 @@ export class LibraryView {
             : 0
         const pColor = progressColor(progress)
 
+        // Deterministic spine color from title hash
+        const spineColors = [
+            theme.accent.blue, theme.accent.purple, theme.accent.cyan,
+            theme.accent.green, theme.accent.pink, theme.accent.amber, theme.accent.orange,
+        ]
+        const spineColor = spineColors[book.title.length % spineColors.length]!
+
+        const isReading = book.current_chapter > 0 && progress < 100
+
         const card = new BoxRenderable(this.renderer, {
             id: `book-card-${index}`,
             width: "100%",
@@ -261,48 +270,83 @@ export class LibraryView {
             borderStyle: "rounded",
             borderColor: isSelected ? theme.border.focused : theme.border.normal,
             backgroundColor: isSelected ? theme.bg.hover : theme.bg.card,
+            flexDirection: "row",
+            paddingLeft: 0,
+            paddingRight: 1,
+            justifyContent: "flex-start",
+            gap: 0,
+        })
+
+        // ── Spine block (3x4 colored area) ──
+        const spine = new BoxRenderable(this.renderer, {
+            id: `book-spine-${index}`,
+            width: 3,
+            height: "100%",
+            backgroundColor: spineColor,
             flexDirection: "column",
-            paddingLeft: 2,
-            paddingRight: 2,
+            alignItems: "center",
+            justifyContent: "center",
+        })
+
+        const spineIcon = new TextRenderable(this.renderer, {
+            id: `book-spine-icon-${index}`,
+            content: book.format === "pdf" ? "PDF" : "EPU",
+            fg: theme.bg.void,
+        })
+        spine.add(spineIcon)
+        card.add(spine)
+
+        // ── Main content area ──
+        const content = new BoxRenderable(this.renderer, {
+            id: `book-content-${index}`,
+            flexGrow: 1,
+            height: "100%",
+            flexDirection: "column",
+            paddingLeft: 1,
+            paddingTop: 0,
+            paddingBottom: 0,
             justifyContent: "center",
             gap: 0,
         })
 
-        // Row 1: Title + Author
+        // Row 1: Title + Author + Badge
         const titleRow = new BoxRenderable(this.renderer, {
             id: `book-title-row-${index}`,
             flexDirection: "row",
             justifyContent: "space-between",
             width: "100%",
+            alignItems: "center",
+            gap: 1,
         })
 
         const title = new TextRenderable(this.renderer, {
             id: `book-title-${index}`,
-            content: t`${isSelected ? fg(theme.accent.blue)("▸ ") : "  "}${bold(fg(isSelected ? theme.accent.blue : theme.text.bright)(
-                truncate(book.title, 40)
-            ))}`,
+            content: t`${isSelected ? fg(theme.accent.blue)("▸ ") : "  "}${bold(fg(isSelected ? theme.accent.blue : theme.text.bright)(truncate(book.title, 36)))}${isReading ? " " + fg(theme.accent.amber)("●") : progress >= 100 ? " " + fg(theme.accent.green)("✓") : ""}`,
         })
 
         const author = new TextRenderable(this.renderer, {
             id: `book-author-${index}`,
-            content: truncate(book.author, 20),
+            content: truncate(book.author, 18),
             fg: theme.text.muted,
         })
 
         titleRow.add(title)
         titleRow.add(author)
 
-        // Row 2: Progress bar + stats
+        // Row 2: Micro progress bar + stats
         const progressRow = new BoxRenderable(this.renderer, {
             id: `book-progress-row-${index}`,
             flexDirection: "row",
             justifyContent: "space-between",
             width: "100%",
+            alignItems: "center",
+            gap: 1,
         })
 
+        const { microProgressBar } = require("../utils/theme")
         const bar = new TextRenderable(this.renderer, {
             id: `book-progress-${index}`,
-            content: t`  ${fg(pColor)(progressBar(progress, 20))} ${fg(theme.text.muted)(`${progress}%`)}`,
+            content: t` ${fg(pColor)(microProgressBar(progress, 24))} ${fg(theme.text.muted)(`${progress}%`)}`,
         })
 
         const lastRead = new TextRenderable(this.renderer, {
@@ -314,8 +358,9 @@ export class LibraryView {
         progressRow.add(bar)
         progressRow.add(lastRead)
 
-        card.add(titleRow)
-        card.add(progressRow)
+        content.add(titleRow)
+        content.add(progressRow)
+        card.add(content)
 
         return card
     }

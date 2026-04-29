@@ -4,10 +4,11 @@
 
 export interface ThemeColors {
   bg: { void: string; surface: string; card: string; hover: string; active: string }
-  text: { body: string; muted: string; subtle: string; bright: string }
+  text: { body: string; muted: string; subtle: string; bright: string; dim: string }
   accent: { blue: string; cyan: string; purple: string; pink: string; green: string; amber: string; orange: string }
   border: { normal: string; focused: string; active: string }
   scrollbar: { track: string; thumb: string }
+  inlineCode: { bg: string; fg: string }
 }
 
 const darkTheme: ThemeColors = {
@@ -23,6 +24,7 @@ const darkTheme: ThemeColors = {
     muted: "#565f89",
     subtle: "#3b4261",
     bright: "#c8d3f5",
+    dim: "#2a3048",
   },
   accent: {
     blue: "#7aa2f7",
@@ -42,21 +44,26 @@ const darkTheme: ThemeColors = {
     track: "#1a1b26",
     thumb: "#7aa2f7",
   },
+  inlineCode: {
+    bg: "#24283b",
+    fg: "#7dcfff",
+  },
 }
 
 const lightTheme: ThemeColors = {
   bg: {
-    void: "#f0ede6",  // warm paper
+    void: "#f0ede6",
     surface: "#e8e4dc",
     card: "#ddd9d0",
     hover: "#d0cbc2",
     active: "#b8b3aa",
   },
   text: {
-    body: "#3b3228",  // dark brown
+    body: "#3b3228",
     muted: "#7a746a",
     subtle: "#a19b92",
     bright: "#1a1510",
+    dim: "#ddd8cf",
   },
   accent: {
     blue: "#34548a",
@@ -68,13 +75,17 @@ const lightTheme: ThemeColors = {
     orange: "#b85c00",
   },
   border: {
-    normal: "#c5bfb6",
+    normal: "#b0a898",
     focused: "#34548a",
     active: "#7847bd",
   },
   scrollbar: {
     track: "#e8e4dc",
     thumb: "#34548a",
+  },
+  inlineCode: {
+    bg: "#e0dbd0",
+    fg: "#0f6b8a",
   },
 }
 
@@ -111,6 +122,38 @@ export function progressBar(percent: number, width: number): string {
   const clamped = Math.max(0, Math.min(100, percent))
   const filled = Math.round((clamped / 100) * width)
   return "█".repeat(filled) + "░".repeat(width - filled)
+}
+
+/**
+ * Create a micro progress bar (single-line, minimal)
+ */
+export function microProgressBar(percent: number, width: number): string {
+  const clamped = Math.max(0, Math.min(100, percent))
+  const filled = Math.round((clamped / 100) * width)
+  return "━".repeat(filled) + "╺".repeat(width - filled)
+}
+
+/**
+ * Format inline code with theme-aware ANSI styling
+ */
+export function formatInlineCode(code: string): string {
+  const t = getTheme()
+  // Use 24-bit color escape sequences for bg and fg
+  const r = parseInt(t.inlineCode.bg.slice(1, 3), 16)
+  const g = parseInt(t.inlineCode.bg.slice(3, 5), 16)
+  const b = parseInt(t.inlineCode.bg.slice(5, 7), 16)
+  const fr = parseInt(t.inlineCode.fg.slice(1, 3), 16)
+  const fg = parseInt(t.inlineCode.fg.slice(3, 5), 16)
+  const fb = parseInt(t.inlineCode.fg.slice(5, 7), 16)
+  return `\x1b[38;2;${fr};${fg};${fb}m\x1b[48;2;${r};${g};${b}m ${code} \x1b[0m`
+}
+
+/**
+ * Get dimmed color (for non-selected text during visual mode)
+ */
+export function dimColor(hex: string): string {
+  // Simple dimming: blend toward background
+  return hex + "80" // 50% alpha for terminals that support it, or just use as-is
 }
 
 /**

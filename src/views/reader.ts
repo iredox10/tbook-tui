@@ -13,7 +13,8 @@ import {
 import { theme, truncate, progressBar, progressColor, formatDuration, getActiveTheme, setActiveTheme, getTheme } from "../utils/theme"
 import { parseEpub, type ParsedBook, type Chapter } from "../services/epub-parser"
 import { parsePdf } from "../services/pdf-parser"
-import { formatTable } from "../utils/html-to-text"
+import { formatTable, type StyledParagraph } from "../utils/html-to-text"
+import { renderParagraph, applyWordHighlight, dimParagraph } from "../utils/render-paragraph"
 import { getBookById, updateReadingProgress, addBookmark, recordReading, addHighlight, getHighlights, getChapterHighlights, addToVocabulary, type BookRecord, type HighlightRecord } from "../services/database"
 import { StatusBar } from "../components/status-bar"
 import { showToast } from "../components/toast"
@@ -336,141 +337,18 @@ export class ReaderView {
         this.readingPane.add(chapterTitle)
         this.chapterTextNodes.push(chapterTitle)
 
-        // Separator
+        // Separator — decorative rule
         const chSep = new TextRenderable(this.renderer, {
             id: "chapter-sep",
-            content: "━".repeat(40),
-            fg: th.border.normal,
+            content: `\n  ${fg(th.text.subtle)("◆  ◆  ◆")}\n`,
         })
         this.readingPane.add(chSep)
         this.chapterTextNodes.push(chSep)
 
-        // Common text properties for readability
-        const textProps = {
-            wrapMode: "word" as const,
-            selectable: true,
-            selectionBg: th.accent.blue,
-            selectionFg: th.bg.void,
-        }
-
-        // Content paragraphs
+        // Content paragraphs — delegated to renderParagraph utility
         for (let i = 0; i < chapter.paragraphs.length; i++) {
             const p = chapter.paragraphs[i]!
-            let node: TextRenderable
-
-            switch (p.type) {
-                case "heading":
-                    node = new TextRenderable(this.renderer, {
-                        id: `para-${i}`,
-                        ...textProps,
-                        content: t`\n\n${bold(fg(
-                            p.level === 1 ? th.accent.purple :
-                                p.level === 2 ? th.accent.blue :
-                                    p.level === 3 ? th.accent.cyan :
-                                        th.accent.green
-                        )(p.text))}\n`,
-                    })
-                    break
-
-                case "quote":
-                    node = new TextRenderable(this.renderer, {
-                        id: `para-${i}`,
-                        ...textProps,
-                        content: t`\n  ${fg(th.accent.cyan)("│")} ${italic(fg(th.text.muted)(p.text))}\n`,
-                    })
-                    break
-
-                case "separator":
-                    node = new TextRenderable(this.renderer, {
-                        id: `para-${i}`,
-                        content: `\n${"  ◆  ◆  ◆".padStart(22)}\n`,
-                        fg: th.text.subtle,
-                    })
-                    break
-
-                case "list-item": {
-                    const indent = "  ".repeat((p.indent || 0) + 1)
-                    let bullet: string
-                    if (p.ordered) {
-                        bullet = `${p.index}.`
-                    } else {
-                        // Different bullet styles for nesting depth
-                        const bullets = ["•", "◦", "▪", "▸"]
-                        bullet = bullets[Math.min(p.indent || 0, bullets.length - 1)]!
-                    }
-                    node = new TextRenderable(this.renderer, {
-                        id: `para-${i}`,
-                        ...textProps,
-                        content: t`${indent}${fg(th.accent.cyan)(bullet)} ${fg(th.text.body)(p.text)}`,
-                    })
-                    break
-                }
-
-                case "code": {
-                    node = new TextRenderable(this.renderer, {
-                        id: `para-${i}`,
-                        ...textProps,
-                        content: this.formatCodeBlock(p.text, p.language),
-                        fg: th.text.body,
-                    })
-                    break
-                }
-
-                case "table": {
-                    const tableText = p.tableRows ? formatTable(p.tableRows) : p.text
-                    node = new TextRenderable(this.renderer, {
-                        id: `para-${i}`,
-                        ...textProps,
-                        content: `\n${tableText}\n`,
-                        fg: th.text.body,
-                    })
-                    break
-                }
-
-                case "note": {
-                    const icons: Record<string, string> = {
-                        tip: "💡", warning: "⚠️", note: "📝", important: "❗",
-                    }
-                    const colors: Record<string, string> = {
-                        tip: th.accent.green, warning: th.accent.amber,
-                        note: th.accent.cyan, important: th.accent.pink,
-                    }
-                    const kind = p.noteKind || "note"
-                    const icon = icons[kind] || "📝"
-                    const color = colors[kind] || th.accent.cyan
-                    node = new TextRenderable(this.renderer, {
-                        id: `para-${i}`,
-                        ...textProps,
-                        content: t`\n  ${fg(color)("┃")} ${icon} ${bold(fg(color)(kind.toUpperCase()))}\n  ${fg(color)("┃")} ${fg(th.text.body)(p.text)}\n`,
-                    })
-                    break
-                }
-
-                default: {
-                    // Regular paragraph — style inline code markers
-                    let content = p.text || ""
-                    if (content.includes("`")) {
-                        // Replace `code` backtick markers with styled inline code
-                        content = content.replace(/`([^`]+)`/g, (_, code) => {
-                            return `\x1b[36m\x1b[48;5;236m ${code} \x1b[0m`
-                        })
-                        node = new TextRenderable(this.renderer, {
-                            id: `para-${i}`,
-                            ...textProps,
-                            content: content ? `\n${content}\n` : "",
-                        })
-                    } else {
-                        node = new TextRenderable(this.renderer, {
-                            id: `para-${i}`,
-                            ...textProps,
-                            content: content ? `\n${content}\n` : "",
-                            fg: th.text.body,
-                        })
-                    }
-                    break
-                }
-            }
-
+            const node = renderParagraph(this.renderer, p, i, th)
             this.readingPane.add(node)
             this.chapterTextNodes.push(node)
         }
@@ -493,6 +371,11 @@ export class ReaderView {
 
         // Update status bar
         this.updateStatusProgress()
+
+        // Update reading estimate (words remaining in chapter)
+        const totalChWords = this.chapterWordCountCache.get(this.currentChapter) || 0
+        const wordsLeft = Math.max(0, totalChWords)
+        this.statusBar.setReadingEstimate(wordsLeft)
 
         // Save progress to DB
         updateReadingProgress(this.book.id, this.currentChapter, 0)
@@ -1127,41 +1010,55 @@ export class ReaderView {
         if (!chapter) return
 
         if (this.visualMode && this.selectionAnchor) {
-            // Visual mode: highlight full range between anchor and cursor
-            this.clearAllSelectionHighlights()
             const { sp, sw, ep, ew } = this.getSelectionRange()
 
-            for (let pi = sp; pi <= ep; pi++) {
-                const words = this.getParaWords(pi)
-                if (words.length === 0) continue
-                const para = chapter.paragraphs[pi]
-                if (!para) continue
-
+            // Dim all paragraphs first, then highlight selection
+            for (let pi = 0; pi < chapter.paragraphs.length; pi++) {
                 const nodeIdx = pi + 3
                 const node = this.chapterTextNodes[nodeIdx]
-                if (!node) continue
+                const para = chapter.paragraphs[pi]
+                if (!node || !para) continue
 
-                const wStart = (pi === sp) ? sw : 0
-                const wEnd = (pi === ep) ? Math.min(ew, words.length - 1) : words.length - 1
+                if (pi < sp || pi > ep) {
+                    // Outside selection range — dim
+                    dimParagraph(node, para, th)
+                } else {
+                    const words = this.getParaWords(pi)
+                    if (words.length === 0) continue
 
-                const beforeParts: string[] = []
-                const highlightedParts: string[] = []
-                const afterParts: string[] = []
+                    const wStart = (pi === sp) ? sw : 0
+                    const wEnd = (pi === ep) ? Math.min(ew, words.length - 1) : words.length - 1
 
-                for (let wi = 0; wi < words.length; wi++) {
-                    if (wi < wStart) beforeParts.push(words[wi]!)
-                    else if (wi <= wEnd) highlightedParts.push(words[wi]!)
-                    else afterParts.push(words[wi]!)
+                    const beforeParts: string[] = []
+                    const highlightedParts: string[] = []
+                    const afterParts: string[] = []
+
+                    for (let wi = 0; wi < words.length; wi++) {
+                        if (wi < wStart) beforeParts.push(words[wi]!)
+                        else if (wi <= wEnd) highlightedParts.push(words[wi]!)
+                        else afterParts.push(words[wi]!)
+                    }
+
+                    const prefix = beforeParts.length > 0 ? beforeParts.join(" ") + " " : ""
+                    const highlighted = highlightedParts.join(" ")
+                    const suffix = afterParts.length > 0 ? " " + afterParts.join(" ") : ""
+
+                    this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix)
                 }
-
-                const prefix = beforeParts.length > 0 ? beforeParts.join(" ") + " " : ""
-                const highlighted = highlightedParts.join(" ")
-                const suffix = afterParts.length > 0 ? " " + afterParts.join(" ") : ""
-
-                this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix)
             }
         } else {
-            // Select mode: single word cursor
+            // Select mode: single word cursor with dimmed surrounding paragraphs
+            for (let pi = 0; pi < chapter.paragraphs.length; pi++) {
+                const nodeIdx = pi + 3
+                const node = this.chapterTextNodes[nodeIdx]
+                const para = chapter.paragraphs[pi]
+                if (!node || !para) continue
+
+                if (pi !== this.selectParaIdx) {
+                    dimParagraph(node, para, th)
+                }
+            }
+
             const words = this.getParaWords(this.selectParaIdx)
             if (words.length === 0) return
             this.selectWordIdx = Math.max(0, Math.min(this.selectWordIdx, words.length - 1))
@@ -1185,30 +1082,22 @@ export class ReaderView {
     }
 
     private applyHighlightToNode(node: any, para: any, th: any, prefix: string, highlighted: string, suffix: string) {
-        switch (para.type) {
-            case "heading":
-                node.content = t`\n\n${fg(th.text.body)(prefix)}${bold(bg(th.accent.amber)(fg(th.bg.void)(highlighted)))}${fg(th.text.body)(suffix)}\n`
-                break
-            case "quote":
-                node.content = t`\n  ${fg(th.accent.cyan)("│")} ${fg(th.text.muted)(prefix)}${bold(bg(th.accent.amber)(fg(th.bg.void)(highlighted)))}${fg(th.text.muted)(suffix)}\n`
-                break
-            case "list-item": {
-                const indent = "  ".repeat((para.indent || 0) + 1)
-                const bullet = para.ordered ? `${para.index}.` : "•"
-                node.content = t`${indent}${fg(th.accent.cyan)(bullet)} ${fg(th.text.body)(prefix)}${bold(bg(th.accent.amber)(fg(th.bg.void)(highlighted)))}${fg(th.text.body)(suffix)}`
-                break
-            }
-            default:
-                node.content = t`\n${fg(th.text.body)(prefix)}${bold(bg(th.accent.amber)(fg(th.bg.void)(highlighted)))}${fg(th.text.body)(suffix)}\n`
-                break
-        }
+        applyWordHighlight(node, para, th, prefix, highlighted, suffix)
     }
 
     private clearAllSelectionHighlights() {
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter) return
+        const th = getTheme()
         for (let i = 0; i < chapter.paragraphs.length; i++) {
-            this.restoreParagraph(i)
+            const nodeIdx = i + 3
+            const node = this.chapterTextNodes[nodeIdx]
+            const para = chapter.paragraphs[i]
+            if (node && para) {
+                const restored = renderParagraph(this.renderer, para, i, th)
+                node.content = restored.content
+                node.fg = restored.fg
+            }
         }
     }
 
@@ -1219,69 +1108,13 @@ export class ReaderView {
         const para = chapter.paragraphs[paraIdx]
         if (!para) return
 
-        const nodeIdx = paraIdx + 3 // 3 fixed nodes before paragraphs
+        const nodeIdx = paraIdx + 3
         const node = this.chapterTextNodes[nodeIdx]
         if (!node) return
 
-        // Restore original content (no ANSI highlights)
-        switch (para.type) {
-            case "heading":
-                node.content = t`\n\n${bold(fg(
-                    para.level === 1 ? th.accent.purple :
-                        para.level === 2 ? th.accent.blue :
-                            para.level === 3 ? th.accent.cyan :
-                                th.accent.green
-                )(para.text))}\n`
-                break
-            case "quote":
-                node.content = t`\n  ${fg(th.accent.cyan)("│")} ${italic(fg(th.text.muted)(para.text))}\n`
-                break
-            case "list-item": {
-                const indent = "  ".repeat((para.indent || 0) + 1)
-                let bullet: string
-                if (para.ordered) {
-                    bullet = `${para.index}.`
-                } else {
-                    const bullets = ["•", "◦", "▪", "▸"]
-                    bullet = bullets[Math.min(para.indent || 0, bullets.length - 1)]!
-                }
-                node.content = t`${indent}${fg(th.accent.cyan)(bullet)} ${fg(th.text.body)(para.text)}`
-                break
-            }
-            case "code": {
-                node.content = this.formatCodeBlock(para.text, para.language)
-                node.fg = th.text.body
-                break
-            }
-            case "table": {
-                const tableText = para.tableRows ? formatTable(para.tableRows) : para.text
-                node.content = `\n${tableText}\n`
-                node.fg = th.text.body
-                break
-            }
-            case "note": {
-                const kind = para.noteKind || "note"
-                const icons: Record<string, string> = { tip: "💡", warning: "⚠️", note: "📝", important: "❗" }
-                const colors: Record<string, string> = { tip: th.accent.green, warning: th.accent.amber, note: th.accent.cyan, important: th.accent.pink }
-                const icon = icons[kind] || "📝"
-                const color = colors[kind] || th.accent.cyan
-                node.content = t`\n  ${fg(color)("┃")} ${icon} ${bold(fg(color)(kind.toUpperCase()))}\n  ${fg(color)("┃")} ${fg(th.text.body)(para.text)}\n`
-                break
-            }
-            default: {
-                let content = para.text || ""
-                if (content.includes("`")) {
-                    content = content.replace(/`([^`]+)`/g, (_: string, code: string) => {
-                        return `\x1b[36m\x1b[48;5;236m ${code} \x1b[0m`
-                    })
-                    node.content = content ? `\n${content}\n` : ""
-                } else {
-                    node.content = content ? `\n${content}\n` : ""
-                    node.fg = th.text.body
-                }
-                break
-            }
-        }
+        const restored = renderParagraph(this.renderer, para, paraIdx, th)
+        node.content = restored.content
+        node.fg = restored.fg
     }
 
     private confirmSelect() {

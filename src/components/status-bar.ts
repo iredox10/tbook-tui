@@ -17,6 +17,8 @@ export class StatusBar {
     private centerText: TextRenderable
     private rightText: TextRenderable
     private renderer: CliRenderer
+    private clockInterval: ReturnType<typeof setInterval> | null = null
+    private showClock = true
 
     constructor(opts: StatusBarOptions) {
         this.renderer = opts.renderer
@@ -57,6 +59,37 @@ export class StatusBar {
         this.root.add(this.rightText)
 
         this.setMode(opts.mode || "library")
+        this.startClock()
+    }
+
+    private startClock() {
+        if (this.clockInterval) return
+        this.clockInterval = setInterval(() => {
+            if (this.showClock) {
+                const now = new Date()
+                const time = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`
+                // Only update center if it's currently empty or was a clock before
+                const contentStr = typeof this.centerText.content === "string" ? this.centerText.content : this.centerText.content.toString()
+                if (!contentStr.includes("Ch") && !contentStr.includes("min")) {
+                    this.centerText.content = t`${fg(theme.text.subtle)(time)}`
+                }
+            }
+        }, 30000)
+    }
+
+    private truncateHints(text: string, maxWidth: number): string {
+        const w = this.renderer.width || 80
+        const avail = Math.max(20, w - maxWidth)
+        if (text.length <= avail) return text
+        // Drop least important hints first
+        const hints = text.split(" · ")
+        let result = hints[0]!
+        for (let i = 1; i < hints.length; i++) {
+            const next = result + " · " + hints[i]
+            if (next.length > avail) break
+            result = next
+        }
+        return result + "…"
     }
 
     setMode(mode: "library" | "reader" | "stats" | "splash" | "select") {
@@ -64,37 +97,45 @@ export class StatusBar {
             case "splash":
                 this.leftText.content = t`${fg(theme.accent.cyan)("TBOOK")} v1.0`
                 this.centerText.content = ""
-                this.rightText.content = t`${fg(theme.text.subtle)("↑↓ Select · ⏎ Open · q Quit")}`
+                this.rightText.content = this.truncateHints("↑↓ Select · ⏎ Open · q Quit", 20)
                 break
             case "library":
-                this.rightText.content = t`${fg(theme.text.subtle)("↑↓ Navigate · ⏎ Open · / Search · n Import · d Delete · ? Help")}`
+                this.rightText.content = this.truncateHints("↑↓ Navigate · ⏎ Open · / Search · n Import · d Delete · ? Help", 25)
                 break
             case "reader":
-                this.rightText.content = t`${fg(theme.text.subtle)("j/k Scroll · s Select · t TOC · / Search · D Dict · ? Help")}`
+                this.rightText.content = this.truncateHints("j/k Scroll · s Select · t TOC · / Search · D Dict · ? Help", 35)
                 break
             case "select":
                 this.leftText.content = t`${bold(fg(theme.accent.amber)("✎ SELECT"))}`
-                this.rightText.content = t`${fg(theme.text.subtle)("h/l Word · j/k Para · v Visual · m Mark · D Dict · Esc Exit")}`
+                this.rightText.content = this.truncateHints("h/l Word · j/k Para · v Visual · m Mark · D Dict · Esc Exit", 30)
                 break
             case "stats":
-                this.rightText.content = t`${fg(theme.text.subtle)("q Back · ← → Week")}`
+                this.rightText.content = this.truncateHints("q Back · ← → Week", 25)
                 break
         }
     }
 
     setReaderProgress(chapter: number, totalChapters: number, percent: number) {
-        const bar = progressBar(percent, 20)
+        const bar = progressBar(percent, 16)
         const color = progressColor(percent)
         this.leftText.content = t`${fg(color)(bar)} ${fg(theme.text.muted)(`${percent}%`)}`
-        this.centerText.content = t`${fg(theme.text.muted)(`Ch ${chapter + 1}/${totalChapters}`)}`
     }
 
     setLibraryInfo(bookCount: number) {
         this.leftText.content = t`${fg(theme.accent.cyan)("📚")} ${fg(theme.text.muted)(`${bookCount} book${bookCount !== 1 ? "s" : ""}`)}`
-        this.centerText.content = ""
+    }
+
+    setReadingEstimate(wordsLeft: number) {
+        const wpm = 250
+        const mins = Math.ceil(wordsLeft / wpm)
+        this.centerText.content = t`${fg(theme.text.subtle)(`~${mins} min left`)}`
     }
 
     destroy() {
+        if (this.clockInterval) {
+            clearInterval(this.clockInterval)
+            this.clockInterval = null
+        }
         this.root.destroy()
     }
 }
