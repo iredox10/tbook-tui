@@ -373,6 +373,11 @@ function looksLikeCodeLine(line: BboxLine, metrics: PdfMetrics): boolean {
     if (text.length > 120 && symbolDensity(text) < 0.06 && keywords === 0) return false
     if (/\bhttps?:\/\/\S+/i.test(text) && keywords === 0) return false
     if (/^[A-Z][A-Za-z0-9 ,.'"-]{6,}$/.test(text) && keywords === 0) return false
+    
+    // Reject garbage text from failed PDF font extraction (e.g. Arabic turning into ~ ~ I , , L)
+    if (keywords === 0 && (/[~]{2,}/.test(text) || /(~\s*){2,}/.test(text) || /(,\s*){3,}/.test(text))) {
+        return false
+    }
 
     const indent = line.xMin - metrics.bodyLeft
     const density = symbolDensity(text)
@@ -423,6 +428,11 @@ function headingFromLine(line: BboxLine, metrics: PdfMetrics): { isHeading: bool
     if (!text || text.length > 140) return { isHeading: false, level: 0 }
     if (/^\.{8,}$/.test(text)) return { isHeading: false, level: 0 }
     if ((text.match(/\./g) || []).length >= 8 && text.replace(/[.\s]/g, "").length < 25) {
+        return { isHeading: false, level: 0 }
+    }
+    
+    // Reject garbage text (bad font extraction)
+    if (/[~^]{2,}/.test(text) || /(,\s*){3,}/.test(text) || symbolDensity(text) > 0.3) {
         return { isHeading: false, level: 0 }
     }
     if (

@@ -56,6 +56,18 @@ A premium **Terminal Book Reader** built with [OpenTUI](https://opentui.com) —
 - **Session Tracking** — Words read + minutes recorded per session
 - **Streak Counter** — Daily reading streak tracking
 
+### 📂 Smart Import
+- **Async Streaming Scan** — Files appear in real-time as they're discovered
+- **Multi-Select** — `Space` to check files, batch import with `Enter`
+- **Live Search/Filter** — `/` to filter results by name, path, or format
+- **Sort Options** — Cycle through name, size, or format sorting with `s`
+- **Metadata Preview** — `p` to peek at title, author, chapters, and word count before importing
+- **Configurable Depth** — `+`/`-` to adjust scan depth (1-8 levels, persisted)
+- **Recent Paths** — Remembers last 10 scanned directories
+- **Direct File Import** — Paste a `.epub`/`.pdf` path and press Enter
+- **Duplicate Detection** — Warns when a book with the same title+author exists
+- **Bulk Progress** — Progress bar with cancel support for batch imports
+
 ## 🚀 Quick Start
 
 ```bash
@@ -122,6 +134,25 @@ brew install poppler
 | `d` | Delete selected book |
 | `?` | Help overlay |
 | `q` | Back to splash |
+
+### Import
+| Key | Action |
+|-----|--------|
+| `Enter` | Scan directory / import selected |
+| `a` | Import all found files |
+| `j` / `k` / `↑` / `↓` | Navigate file list |
+| `Ctrl+d` / `Ctrl+u` | Page down / up (jump 10) |
+| `g` / `G` | Jump to top / bottom |
+| `Space` | Toggle multi-select checkmark |
+| `/` | Search / filter results |
+| `s` | Cycle sort (name → size → format) |
+| `p` | Preview file metadata |
+| `+` / `-` | Increase / decrease scan depth |
+| `1` / `2` / `3` | Quick scan Home / Documents / Downloads |
+| `4`-`6` | Recent scan paths |
+| `e` | Edit scan path |
+| `Esc` | Cancel import / close filter |
+| `q` | Back to library |
 
 ## 📁 Architecture
 

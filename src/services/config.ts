@@ -15,6 +15,8 @@ export interface TBookConfig {
     exportFormat: "obsidian" | "logseq"
     sidebarVisible: boolean    // show chapter sidebar by default
     mouseEnabled: boolean      // enable mouse scroll
+    scanDepth: number          // max directory depth for import scan (1-8)
+    recentScanPaths: string[]  // last N scanned directories
 }
 
 const CONFIG_PATH = join(homedir(), ".tbook", "config.json")
@@ -32,6 +34,8 @@ const DEFAULT_CONFIG: TBookConfig = {
     exportFormat: "obsidian",
     sidebarVisible: true,
     mouseEnabled: true,
+    scanDepth: 3,
+    recentScanPaths: [],
 }
 
 let cachedConfig: TBookConfig | null = null
