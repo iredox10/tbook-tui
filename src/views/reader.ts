@@ -836,7 +836,7 @@ export class ReaderView {
                 this.currentChapter = chapter
                 this.renderChapter()
                 // Scroll to the paragraph
-                const estimatedLine = paraIdx * 2
+                const estimatedLine = this.getEstimatedLineOffset(paraIdx)
                 this.readingPane.scrollTo(Math.max(0, estimatedLine - 3))
                 this.readingPane.focus()
             },
@@ -878,6 +878,32 @@ export class ReaderView {
 
     // ── Inline Select Mode / Visual Mode ─────────────────────────
 
+    // Helper to accurately estimate line offset for a paragraph
+    private getEstimatedLineOffset(targetParaIdx: number): number {
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter) return 0
+        
+        let offset = 6 // fixed nodes at top (title, separator, spacing)
+        for (let i = 0; i < targetParaIdx; i++) {
+            const para = chapter.paragraphs[i]
+            if (!para || !para.text) {
+                offset += 1
+                continue
+            }
+            if (para.type === "code") {
+                offset += para.text.split("\n").length + 2
+                continue
+            }
+            if (para.type === "table") {
+                offset += (para.tableRows?.length || 0) + 4
+                continue
+            }
+            // Assume roughly 70 chars per line in the reader viewport
+            offset += Math.max(1, Math.ceil(para.text.length / 70)) + 1 
+        }
+        return offset
+    }
+
     private enterSelectMode() {
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter || chapter.paragraphs.length === 0) return
@@ -885,15 +911,48 @@ export class ReaderView {
         this.selectMode = true
         this.visualMode = false
         this.selectionAnchor = null
+        
+        // Find the paragraph that is currently at the top of the viewport
+        const currentScroll = this.readingPane.scrollTop
         this.selectParaIdx = 0
+        
+        let cumulativeLines = 6
+        for (let i = 0; i < chapter.paragraphs.length; i++) {
+            const para = chapter.paragraphs[i]
+            if (!para) continue
+            
+            let lines = 1
+            if (para.type === "code") lines = para.text.split("\n").length + 2
+            else if (para.type === "table") lines = (para.tableRows?.length || 0) + 4
+            else if (para.text) lines = Math.max(1, Math.ceil(para.text.length / 70)) + 1
+            
+            if (cumulativeLines + lines > currentScroll + 2) {
+                this.selectParaIdx = i
+                break
+            }
+            cumulativeLines += lines
+        }
+
         this.selectWordIdx = 0
 
-        // Find first paragraph with actual text
+        // Find first paragraph with actual text starting from our estimate
         while (this.selectParaIdx < chapter.paragraphs.length) {
             const words = this.getParaWords(this.selectParaIdx)
             if (words.length > 0) break
             this.selectParaIdx++
         }
+        
+        // If we ran off the end, search backwards
+        if (this.selectParaIdx >= chapter.paragraphs.length) {
+            this.selectParaIdx = chapter.paragraphs.length - 1
+            while (this.selectParaIdx >= 0) {
+                const words = this.getParaWords(this.selectParaIdx)
+                if (words.length > 0) break
+                this.selectParaIdx--
+            }
+        }
+        
+        this.selectParaIdx = Math.max(0, this.selectParaIdx)
 
         this.statusBar.setMode("select")
         showToast(this.renderer, "✎ SELECT — h/l word · j/k para · v visual · m mark · D dict · Esc exit", "info")
@@ -1077,7 +1136,7 @@ export class ReaderView {
         }
 
         // Scroll to keep cursor visible
-        const estimatedLine = this.selectParaIdx * 2
+        const estimatedLine = this.getEstimatedLineOffset(this.selectParaIdx)
         this.readingPane.scrollTo(Math.max(0, estimatedLine - 5))
     }
 
