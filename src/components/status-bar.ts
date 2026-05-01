@@ -115,10 +115,11 @@ export class StatusBar {
         }
     }
 
-    setReaderProgress(chapter: number, totalChapters: number, percent: number) {
-        const bar = progressBar(percent, 16)
+    setReaderProgress(chapter: number, totalChapters: number, percent: number, timeInfo?: string) {
+        const bar = progressBar(percent, 20)
         const color = progressColor(percent)
         this.leftText.content = t`${fg(color)(bar)} ${fg(theme.text.muted)(`${percent}%`)}`
+        this.centerText.content = t`${fg(theme.text.muted)(`Ch ${chapter + 1}/${totalChapters}${timeInfo ? ` · ${timeInfo}` : ''}`)}`
     }
 
     setLibraryInfo(bookCount: number) {

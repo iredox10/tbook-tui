@@ -27,7 +27,7 @@ interface FoundFile {
     dir: string
     sizeBytes: number
     size: string
-    format: "epub" | "pdf"
+    format: "epub" | "pdf" | "md" | "txt"
     alreadyImported: boolean
     selected: boolean
 }
@@ -405,11 +405,15 @@ export class ImportView {
         }
         const epubs = this.files.filter(f => f.format === "epub").length
         const pdfs = this.files.filter(f => f.format === "pdf").length
+        const mds = this.files.filter(f => f.format === "md").length
+        const txts = this.files.filter(f => f.format === "txt").length
         const imported = this.files.filter(f => f.alreadyImported).length
         const checked = this.files.filter(f => f.selected).length
         const parts: string[] = []
         if (epubs > 0) parts.push(`${epubs} EPUB`)
         if (pdfs > 0) parts.push(`${pdfs} PDF`)
+        if (mds > 0) parts.push(`${mds} MD`)
+        if (txts > 0) parts.push(`${txts} TXT`)
         const sortLabel = this.sortMode === "name" ? "A-Z" : this.sortMode === "size" ? "Size" : "Format"
 
         // Build plain-text segments, then style them all in one t`` call
@@ -552,9 +556,13 @@ export class ImportView {
         } else {
             const epubs = this.files.filter(f => f.format === "epub").length
             const pdfs = this.files.filter(f => f.format === "pdf").length
+            const mds = this.files.filter(f => f.format === "md").length
+            const txts = this.files.filter(f => f.format === "txt").length
             const parts = []
             if (epubs > 0) parts.push(`${epubs} EPUB`)
             if (pdfs > 0) parts.push(`${pdfs} PDF`)
+            if (mds > 0) parts.push(`${mds} MD`)
+            if (txts > 0) parts.push(`${txts} TXT`)
             showToast(this.renderer, `Found ${parts.join(" + ")} — scan complete`, "success")
             this.renderFileList()
         }
@@ -573,8 +581,8 @@ export class ImportView {
                         await this.walkDirAsync(fullPath, maxDepth, depth + 1)
                     } else {
                         const ext = extname(entry).toLowerCase()
-                        if (ext === ".epub" || ext === ".pdf") {
-                            const format = ext === ".epub" ? "epub" : "pdf" as const
+                        if (ext === ".epub" || ext === ".pdf" || ext === ".md" || ext === ".txt") {
+                            const format = ext.slice(1) as "epub" | "pdf" | "md" | "txt"
                             const sizeMB = (s.size / (1024 * 1024)).toFixed(1)
                             const alreadyImported = !!getBookByPath(fullPath)
                             const relDir = this.shortenPath(dirname(fullPath))
@@ -623,7 +631,7 @@ export class ImportView {
         })
 
         const lines = [
-            { id: "empty-1", text: t`${fg(theme.text.muted)("📭  No EPUB or PDF files found")}` },
+            { id: "empty-1", text: t`${fg(theme.text.muted)("📭  No EPUB, PDF, MD, or TXT files found")}` },
             { id: "empty-2", text: t`${fg(theme.text.subtle)(`in ${truncate(this.shortenPath(dirPath), 50)}`)}` },
             { id: "empty-3", text: " " },
             { id: "empty-4", text: t`${fg(theme.text.muted)("Try:")}` },
@@ -772,7 +780,7 @@ export class ImportView {
             }))
             topLine.add(new TextRenderable(this.renderer, {
                 id: `file-fmt-${i}`,
-                content: t`${fg(file.format === "pdf" ? theme.accent.orange : theme.accent.purple)(file.format.toUpperCase())}`,
+                content: t`${fg(file.format === "pdf" ? theme.accent.orange : file.format === "epub" ? theme.accent.purple : theme.accent.cyan)(file.format.toUpperCase())}`,
             }))
             topLine.add(new TextRenderable(this.renderer, {
                 id: `file-name-${i}`,
@@ -869,7 +877,9 @@ export class ImportView {
             try {
                 const parsed = file.format === "pdf"
                     ? await parsePdf(file.path)
-                    : await parseEpub(file.path)
+                    : file.format === "epub"
+                        ? await parseEpub(file.path)
+                        : await (await import("../services/md-parser")).parseMd(file.path)
                 insertBook({
                     title: parsed.metadata.title,
                     author: parsed.metadata.author,

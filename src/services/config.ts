@@ -17,6 +17,7 @@ export interface TBookConfig {
     mouseEnabled: boolean      // enable mouse scroll
     scanDepth: number          // max directory depth for import scan (1-8)
     recentScanPaths: string[]  // last N scanned directories
+    lineSpacing: number        // 0=compact, 1=normal, 2=loose
 }
 
 const CONFIG_PATH = join(homedir(), ".tbook", "config.json")
@@ -36,6 +37,7 @@ const DEFAULT_CONFIG: TBookConfig = {
     mouseEnabled: true,
     scanDepth: 3,
     recentScanPaths: [],
+    lineSpacing: 1,
 }
 
 let cachedConfig: TBookConfig | null = null

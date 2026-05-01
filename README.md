@@ -9,7 +9,7 @@ A premium **Terminal Book Reader** built with [OpenTUI](https://opentui.com) —
 ## ✨ Features
 
 ### 📚 Core Reading
-- **EPUB & PDF Support** — Full chapter parsing with styled headings, quotes, and paragraphs
+- **EPUB, PDF, MD, & TXT Support** — Full chapter parsing with styled headings, quotes, and paragraphs
 - **Library Management** — SQLite-backed book library with search and sorting
 - **Reading Progress** — Automatic save/resume with per-book chapter tracking
 - **Vim Keybinds** — `j/k` scroll, `h/l` chapters, `space` page-down, `g/G` jump

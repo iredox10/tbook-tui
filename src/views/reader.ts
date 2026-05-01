@@ -64,6 +64,8 @@ export class ReaderView {
     private readStartTime = 0
     private wordsReadThisSession = 0
     private chapterWordCountCache: Map<number, number> = new Map()
+    private lineSpacing = 1
+    private timerInterval: ReturnType<typeof setInterval> | null = null
 
     // Phase 3 modals
     private helpOverlay: HelpOverlay | null = null
@@ -109,10 +111,16 @@ export class ReaderView {
         this.zoomIndex = config.defaultZoom
         this.autoScrollSpeedIndex = config.autoScrollSpeed
         this.sidebarVisible = config.sidebarVisible
+        this.lineSpacing = config.lineSpacing ?? 1
         if (config.theme !== getActiveTheme()) {
             setActiveTheme(config.theme)
         }
         this.wordsReadThisSession = 0
+
+        if (this.timerInterval) clearInterval(this.timerInterval)
+        this.timerInterval = setInterval(() => {
+            this.updateStatusProgress()
+        }, 5000)
 
         // Show loading spinner
         const loading = new TextRenderable(this.renderer, {
@@ -135,6 +143,9 @@ export class ReaderView {
             // Choose parser based on format
             if (book.format === "pdf") {
                 this.parsedBook = await parsePdf(book.path)
+            } else if (book.format === "md" || book.format === "txt") {
+                const { parseMd } = await import("../services/md-parser")
+                this.parsedBook = await parseMd(book.path)
             } else {
                 this.parsedBook = await parseEpub(book.path)
             }
@@ -351,6 +362,15 @@ export class ReaderView {
             const node = renderParagraph(this.renderer, p, i, th)
             this.readingPane.add(node)
             this.chapterTextNodes.push(node)
+
+            if (this.lineSpacing > 0 && p.type !== "separator") {
+                const spc = new TextRenderable(this.renderer, {
+                    id: `para-spc-${i}`,
+                    content: "\n".repeat(this.lineSpacing),
+                })
+                this.readingPane.add(spc)
+                this.chapterTextNodes.push(spc)
+            }
         }
 
         // Apply saved highlights from database
@@ -387,10 +407,24 @@ export class ReaderView {
         const percent = this.parsedBook.chapters.length > 0
             ? Math.round(((this.currentChapter + 1) / this.parsedBook.chapters.length) * 100)
             : 0
+
+        // Calculate time info
+        const minutesElapsed = (Date.now() - this.readStartTime) / 60000
+        let timeInfo = ""
+        if (minutesElapsed >= 0.5 && this.wordsReadThisSession > 50) {
+            const wpm = this.wordsReadThisSession / minutesElapsed
+            const totalChapterWords = this.chapterWordCountCache.get(this.currentChapter) || 0
+            const progressRatio = this.readingPane.scrollHeight > 0 ? (this.readingPane.scrollTop / this.readingPane.scrollHeight) : 0
+            const wordsLeft = totalChapterWords * (1 - progressRatio)
+            const minsLeft = Math.ceil(wordsLeft / wpm)
+            timeInfo = `${minsLeft}m left`
+        }
+
         this.statusBar.setReaderProgress(
             this.currentChapter,
             this.parsedBook.chapters.length,
             percent,
+            timeInfo
         )
     }
 
@@ -443,6 +477,21 @@ export class ReaderView {
 
         const label = pad! <= 2 ? "Compact" : pad! <= 6 ? "Normal" : pad! <= 12 ? "Wide" : "Ultra-wide"
         showToast(this.renderer, `📐 Text width: ${label} (padding ${pad!})`, "info")
+    }
+
+    // ── Line Spacing ────────────────────────────────────────────
+
+    private adjustLineSpacing(delta: number) {
+        const next = Math.max(0, Math.min(2, this.lineSpacing + delta))
+        if (next === this.lineSpacing) {
+            showToast(this.renderer, delta > 0 ? "Max line spacing" : "Min line spacing", "info")
+            return
+        }
+        this.lineSpacing = next
+        updateConfig("lineSpacing", next)
+        const label = next === 0 ? "Compact" : next === 1 ? "Normal" : "Loose"
+        showToast(this.renderer, `↕ Line Spacing: ${label}`, "info")
+        this.renderChapter()
     }
 
     // ── Auto-scroll ─────────────────────────────────────────────
@@ -632,6 +681,14 @@ export class ReaderView {
                 case "_":
                     this.adjustZoom(-1)
                     return true
+                
+                // Line spacing
+                case "]":
+                    this.adjustLineSpacing(1)
+                    return true
+                case "[":
+                    this.adjustLineSpacing(-1)
+                    return true
 
                 // Auto-scroll
                 case "a":
@@ -718,6 +775,7 @@ export class ReaderView {
 
                 // Quit
                 case "q":
+                    if (this.timerInterval) clearInterval(this.timerInterval)
                     this.recordSessionStats()
                     this.stopAutoScroll()
                     this.app.showLibrary()

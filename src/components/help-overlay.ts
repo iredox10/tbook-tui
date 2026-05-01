@@ -81,6 +81,7 @@ export class HelpOverlay {
                     ["g / G", "Jump to top / bottom"],
                     ["h / l / ← / →", "Previous / next chapter"],
                     ["+ / -", "Zoom text wider / narrower"],
+                    ["[ / ]", "Decrease / increase line spacing"],
                     ["a", "Toggle auto-scroll"],
                     ["A", "Cycle auto-scroll speed"],
                     ["f", "Toggle focus mode"],
