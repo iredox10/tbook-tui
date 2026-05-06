@@ -115,11 +115,12 @@ export class StatusBar {
         }
     }
 
-    setReaderProgress(chapter: number, totalChapters: number, percent: number, timeInfo?: string) {
+    setReaderProgress(chapter: number, totalChapters: number, percent: number, timeInfo?: string, chapterPercent?: number) {
         const bar = progressBar(percent, 20)
         const color = progressColor(percent)
         this.leftText.content = t`${fg(color)(bar)} ${fg(theme.text.muted)(`${percent}%`)}`
-        this.centerText.content = t`${fg(theme.text.muted)(`Ch ${chapter + 1}/${totalChapters}${timeInfo ? ` · ${timeInfo}` : ''}`)}`
+        const chPct = typeof chapterPercent === "number" ? ` ▸ ${chapterPercent}%` : ""
+        this.centerText.content = t`${fg(theme.text.muted)(`Ch ${chapter + 1}/${totalChapters}${chPct}${timeInfo ? ` · ${timeInfo}` : ''}`)}`
     }
 
     setLibraryInfo(bookCount: number) {

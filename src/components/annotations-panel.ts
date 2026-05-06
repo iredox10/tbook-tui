@@ -152,7 +152,8 @@ export class AnnotationsPanel {
         for (let i = 0; i < this.annotations.length; i++) {
             const ann = this.annotations[i]!
             const isSelected = i === this.selectedIndex
-            const colorIcon = ann.color === "yellow" ? "🟡" : "📌"
+            const colorIcons: Record<string, string> = { yellow: "🟡", green: "🟢", blue: "🔵", pink: "🩷" }
+            const colorIcon = colorIcons[ann.color] || "📌"
 
             const node = new TextRenderable(this.renderer, {
                 id: `annot-item-${i}`,

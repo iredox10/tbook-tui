@@ -22,6 +22,13 @@ export interface TBookConfig {
     aiModel: string
     aiApiKey: string
     aiBaseUrl: string
+    // Reading goals
+    readingGoal: {
+        dailyWords: number     // 0 = disabled
+        dailyMinutes: number   // 0 = disabled
+    }
+    // Custom keybinds (key = action, value = key sequence)
+    customKeybinds: Record<string, string>
 }
 
 const CONFIG_PATH = join(homedir(), ".tbook", "config.json")
@@ -46,6 +53,11 @@ const DEFAULT_CONFIG: TBookConfig = {
     aiModel: "llama3",
     aiApiKey: "",
     aiBaseUrl: "http://localhost:11434",
+    readingGoal: {
+        dailyWords: 0,
+        dailyMinutes: 0,
+    },
+    customKeybinds: {},
 }
 
 let cachedConfig: TBookConfig | null = null

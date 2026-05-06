@@ -4,13 +4,15 @@
 
 import type { CliRenderer } from "@opentui/core"
 import {
-    BoxRenderable, TextRenderable,
+    BoxRenderable, TextRenderable, ScrollBoxRenderable,
     t, bold, fg,
 } from "@opentui/core"
-import { theme, progressBar, formatDuration } from "../utils/theme"
-import { getWeeklyStats, getTotalStats } from "../services/database"
-import { getWeeklyStatsOffset } from "../services/database"
+import { theme, progressBar, progressColor } from "../utils/theme"
+import { getWeeklyStats, getTotalStats, getTodayStats, getSessionHistory } from "../services/database"
+import { loadConfig } from "../services/config"
+import { exportAllAnnotations } from "../services/export"
 import { StatusBar } from "../components/status-bar"
+import { showToast } from "../components/toast"
 import type { App } from "../app"
 
 export class StatsView {
@@ -28,6 +30,9 @@ export class StatsView {
     render() {
         const weekly = getWeeklyStats()
         const totals = getTotalStats()
+        const todayStats = getTodayStats()
+        const config = loadConfig()
+        const sessions = getSessionHistory(10)
 
         this.container = new BoxRenderable(this.renderer, {
             id: "stats-root",
@@ -36,7 +41,26 @@ export class StatsView {
             flexDirection: "column",
             backgroundColor: theme.bg.void,
             padding: 2,
-            gap: 2,
+            gap: 1,
+        })
+
+        // ── Scrollable content area ──
+        const scrollArea = new ScrollBoxRenderable(this.renderer, {
+            id: "stats-scroll",
+            width: "100%",
+            flexGrow: 1,
+            scrollbarOptions: {
+                trackOptions: {
+                    foregroundColor: theme.scrollbar.thumb,
+                    backgroundColor: theme.scrollbar.track,
+                },
+            },
+            contentOptions: {
+                flexDirection: "column",
+                gap: 1,
+                padding: 0,
+                backgroundColor: theme.bg.void,
+            },
         })
 
         // ── Header ──
@@ -44,7 +68,54 @@ export class StatsView {
             id: "stats-header",
             content: t`${bold(fg(theme.accent.blue)("📊 Reading Statistics"))}`,
         })
-        this.container.add(header)
+        scrollArea.add(header)
+
+        // ── Reading Goals ──
+        const goal = config.readingGoal
+        if (goal.dailyWords > 0 || goal.dailyMinutes > 0) {
+            const goalBox = new BoxRenderable(this.renderer, {
+                id: "stats-goals",
+                width: "100%",
+                borderStyle: "rounded",
+                borderColor: theme.accent.green,
+                backgroundColor: theme.bg.card,
+                padding: 1,
+                flexDirection: "column",
+                gap: 0,
+            })
+
+            goalBox.add(new TextRenderable(this.renderer, {
+                id: "stats-goals-title",
+                content: t`${bold(fg(theme.accent.green)("🎯 Daily Reading Goals"))}`,
+            }))
+
+            if (goal.dailyWords > 0) {
+                const wordPct = Math.min(100, Math.round((todayStats.words_read / goal.dailyWords) * 100))
+                const bar = progressBar(wordPct, 25)
+                const color = progressColor(wordPct)
+                goalBox.add(new TextRenderable(this.renderer, {
+                    id: "stats-goal-words",
+                    content: t`  ${fg(theme.text.muted)("Words:")} ${fg(color)(bar)} ${fg(theme.text.body)(`${todayStats.words_read.toLocaleString()} / ${goal.dailyWords.toLocaleString()}`)} ${wordPct >= 100 ? fg(theme.accent.green)("✓ Done!") : ""}`,
+                }))
+            }
+
+            if (goal.dailyMinutes > 0) {
+                const minPct = Math.min(100, Math.round((todayStats.minutes_read / goal.dailyMinutes) * 100))
+                const bar = progressBar(minPct, 25)
+                const color = progressColor(minPct)
+                goalBox.add(new TextRenderable(this.renderer, {
+                    id: "stats-goal-mins",
+                    content: t`  ${fg(theme.text.muted)("Time: ")} ${fg(color)(bar)} ${fg(theme.text.body)(`${todayStats.minutes_read}m / ${goal.dailyMinutes}m`)} ${minPct >= 100 ? fg(theme.accent.green)("✓ Done!") : ""}`,
+                }))
+            }
+
+            scrollArea.add(goalBox)
+        } else {
+            scrollArea.add(new TextRenderable(this.renderer, {
+                id: "stats-goals-hint",
+                content: t`  ${fg(theme.text.subtle)("💡 Set reading goals in ~/.tbook/config.json (readingGoal.dailyWords / dailyMinutes)")}`,
+            }))
+        }
 
         // ── Weekly Bar Chart (Compact vertical blocks) ──
         const chartBox = new BoxRenderable(this.renderer, {
@@ -141,30 +212,7 @@ export class StatsView {
             }))
         }
 
-        // Day labels row
-        let labelLine = "  "
-        for (const b of bars) {
-            const color = b.isToday ? theme.text.bright : theme.text.muted
-            labelLine += `${fg(color)(b.label.slice(0, 2))} `
-        }
-        chartBox.add(new TextRenderable(this.renderer, {
-            id: "stats-vlabels",
-            content: labelLine,
-        }))
-
-        // Word count row
-        let countLine = "  "
-        for (const b of bars) {
-            const s = b.words > 0 ? (b.words >= 1000 ? (b.words / 1000).toFixed(1) + "k" : b.words.toString()) : "-"
-            const color = b.isToday ? theme.text.bright : theme.text.muted
-            countLine += `${fg(color)(s.padStart(2).slice(0, 2))} `
-        }
-        chartBox.add(new TextRenderable(this.renderer, {
-            id: "stats-vcounts",
-            content: countLine,
-        }))
-
-        this.container.add(chartBox)
+        scrollArea.add(chartBox)
 
         // ── Summary Cards ──
         const cardsRow = new BoxRenderable(this.renderer, {
@@ -210,7 +258,50 @@ export class StatsView {
             cardsRow.add(card)
         }
 
-        this.container.add(cardsRow)
+        scrollArea.add(cardsRow)
+
+        // ── Session History ──
+        if (sessions.length > 0) {
+            const historyBox = new BoxRenderable(this.renderer, {
+                id: "stats-history",
+                width: "100%",
+                borderStyle: "rounded",
+                borderColor: theme.border.normal,
+                backgroundColor: theme.bg.card,
+                padding: 1,
+                flexDirection: "column",
+                gap: 0,
+            })
+
+            historyBox.add(new TextRenderable(this.renderer, {
+                id: "stats-history-title",
+                content: t`${bold(fg(theme.accent.cyan)("📅 Recent Sessions"))}`,
+            }))
+
+            historyBox.add(new TextRenderable(this.renderer, {
+                id: "stats-history-spacer",
+                content: "",
+            }))
+
+            for (let i = 0; i < sessions.length; i++) {
+                const s = sessions[i]!
+                const date = s.ended_at ? new Date(s.ended_at).toLocaleDateString() : "Unknown"
+                const time = s.ended_at ? new Date(s.ended_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""
+                const chapters = s.start_chapter === s.end_chapter
+                    ? `Ch.${s.start_chapter + 1}`
+                    : `Ch.${s.start_chapter + 1}–${s.end_chapter + 1}`
+                const title = s.book_title.length > 25 ? s.book_title.slice(0, 25) + "…" : s.book_title
+
+                historyBox.add(new TextRenderable(this.renderer, {
+                    id: `stats-session-${i}`,
+                    content: t`  ${fg(theme.text.subtle)(date)} ${fg(theme.text.subtle)(time)} ${fg(theme.accent.blue)(title)} ${fg(theme.text.muted)(chapters)} ${fg(theme.text.subtle)(`${s.minutes_read}m · ${s.words_read.toLocaleString()} words`)}`,
+                }))
+            }
+
+            scrollArea.add(historyBox)
+        }
+
+        this.container.add(scrollArea)
 
         // ── Status bar ──
         this.statusBar = new StatusBar({ renderer: this.renderer, mode: "stats" })
@@ -222,6 +313,24 @@ export class StatsView {
         this.inputHandler = (sequence: string) => {
             if (sequence === "q") {
                 this.app.showLibrary()
+                return true
+            }
+            if (sequence === "j" || sequence === "\x1b[B") {
+                scrollArea.scrollBy(1)
+                return true
+            }
+            if (sequence === "k" || sequence === "\x1b[A") {
+                scrollArea.scrollBy(-1)
+                return true
+            }
+            if (sequence === "a" || sequence === "A") {
+                // Export all annotations
+                const result = exportAllAnnotations()
+                if (result.success) {
+                    showToast(this.renderer, `📝 Exported ${result.count} annotations to ${result.path}`, "success")
+                } else {
+                    showToast(this.renderer, `Failed: ${result.error}`, "error")
+                }
                 return true
             }
             return false

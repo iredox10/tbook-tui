@@ -13,9 +13,10 @@ import {
 import { theme, truncate, progressBar, progressColor, formatDuration, getActiveTheme, setActiveTheme, getTheme } from "../utils/theme"
 import { parseEpub, type ParsedBook, type Chapter } from "../services/epub-parser"
 import { parsePdf } from "../services/pdf-parser"
-import { formatTable, type StyledParagraph } from "../utils/html-to-text"
-import { renderParagraph, applyWordHighlight, dimParagraph } from "../utils/render-paragraph"
-import { getBookById, updateReadingProgress, addBookmark, recordReading, addHighlight, getHighlights, getChapterHighlights, addToVocabulary, type BookRecord, type HighlightRecord } from "../services/database"
+import { formatTable } from "../utils/html-to-text"
+import { getBookById, updateReadingProgress, addBookmark, recordReading, recordSession, addHighlight, getHighlights, getChapterHighlights, addToVocabulary, type BookRecord, type HighlightRecord } from "../services/database"
+import { generateDeepLink, copyDeepLinkToClipboard } from "../services/deep-link"
+import { exportAllAnnotations } from "../services/export"
 import { StatusBar } from "../components/status-bar"
 import { showToast } from "../components/toast"
 import { HelpOverlay } from "../components/help-overlay"
@@ -55,6 +56,8 @@ export class ReaderView {
     private book!: BookRecord
     private parsedBook!: ParsedBook
     private currentChapter = 0
+    private savedScrollPosition = 0
+    private initialChapterLoad = true
     private sidebarVisible = true
     private minimapVisible = false
     private chapterTextNodes: TextRenderable[] = []
@@ -67,6 +70,7 @@ export class ReaderView {
     private autoScrollSpeedIndex = 1 // "Normal"
     private autoScrollActive = false
     private readStartTime = 0
+    private startChapter = 0  // chapter index when session started
     private wordsReadThisSession = 0
     private chapterWordCountCache: Map<number, number> = new Map()
     private lineSpacing = 1
@@ -92,6 +96,20 @@ export class ReaderView {
     private minimapInterval: Timer | null = null
 
     private inputHandler?: (sequence: string) => boolean
+    private destroyed = false
+
+    // Per-chapter scroll memory (session-level)
+    private chapterScrollMemory: Map<number, number> = new Map()
+    // Chapter completion tracking
+    private completedChapters: Set<number> = new Set()
+
+    // Search-in-chapter state for n/N navigation
+    private lastSearchQuery = ""
+    private searchMatches: { paraIdx: number; charIdx: number }[] = []
+    private searchMatchIndex = -1
+
+    // Multi-color highlight state
+    private highlightColor: "yellow" | "green" | "blue" | "pink" = "yellow"
 
     // Inline select mode / visual mode
     private selectMode = false
@@ -115,7 +133,10 @@ export class ReaderView {
 
         this.book = book
         this.currentChapter = book.current_chapter
+        this.savedScrollPosition = book.scroll_position || 0
+        this.initialChapterLoad = true
         this.readStartTime = Date.now()
+        this.startChapter = this.currentChapter
 
         // Phase 4: Apply saved config preferences
         const config = loadConfig()
@@ -316,15 +337,17 @@ export class ReaderView {
         for (let i = 0; i < this.parsedBook.chapters.length; i++) {
             const ch = this.parsedBook.chapters[i]!
             const isCurrent = i === this.currentChapter
+            const isCompleted = this.completedChapters.has(i)
             const num = (i + 1).toString().padStart(2, " ")
+
+            // Chapter completion marker
+            const markerStr = isCurrent ? "▸" : isCompleted ? "✓" : " "
+            const markerColor = isCurrent ? th.accent.blue : isCompleted ? th.accent.green : th.text.muted
+            const labelColor = isCurrent ? th.accent.blue : isCompleted ? th.accent.green : th.text.muted
 
             const item = new TextRenderable(this.renderer, {
                 id: `sidebar-ch-${i}`,
-                content: t` ${isCurrent
-                    ? fg(th.accent.blue)("▸")
-                    : " "}${fg(isCurrent
-                        ? th.accent.blue
-                        : th.text.muted)(`${num}. ${truncate(ch.title, 13)}`)}`,
+                content: t` ${fg(markerColor)(markerStr)}${fg(labelColor)(`${num}. ${truncate(ch.title, 13)}`)}`,
             })
 
             this.sidebar.add(item)
@@ -392,7 +415,131 @@ export class ReaderView {
         // Content paragraphs — delegated to renderParagraph utility
         for (let i = 0; i < chapter.paragraphs.length; i++) {
             const p = chapter.paragraphs[i]!
-            const node = renderParagraph(this.renderer, p, i, th)
+            let node: TextRenderable
+
+            switch (p.type) {
+                case "heading":
+                    node = new TextRenderable(this.renderer, {
+                        id: `para-${i}`,
+                        ...textProps,
+                        content: t`\n\n${bold(fg(
+                            p.level === 1 ? th.accent.purple :
+                                p.level === 2 ? th.accent.blue :
+                                    p.level === 3 ? th.accent.cyan :
+                                        th.accent.green
+                        )(p.text))}\n`,
+                    })
+                    break
+
+                case "quote":
+                    node = new TextRenderable(this.renderer, {
+                        id: `para-${i}`,
+                        ...textProps,
+                        content: t`\n  ${fg(th.accent.cyan)("│")} ${italic(fg(th.text.muted)(p.text))}\n`,
+                    })
+                    break
+
+                case "separator":
+                    node = new TextRenderable(this.renderer, {
+                        id: `para-${i}`,
+                        content: `\n${"  ◆  ◆  ◆".padStart(22)}\n`,
+                        fg: th.text.subtle,
+                    })
+                    break
+
+                case "list-item": {
+                    const indent = "  ".repeat((p.indent || 0) + 1)
+                    let bullet: string
+                    if (p.ordered) {
+                        bullet = `${p.index}.`
+                    } else {
+                        // Different bullet styles for nesting depth
+                        const bullets = ["•", "◦", "▪", "▸"]
+                        bullet = bullets[Math.min(p.indent || 0, bullets.length - 1)]!
+                    }
+                    node = new TextRenderable(this.renderer, {
+                        id: `para-${i}`,
+                        ...textProps,
+                        content: t`${indent}${fg(th.accent.cyan)(bullet)} ${fg(th.text.body)(p.text)}`,
+                    })
+                    break
+                }
+
+                case "code": {
+                    node = new TextRenderable(this.renderer, {
+                        id: `para-${i}`,
+                        ...textProps,
+                        content: this.formatCodeBlock(p.text, p.language),
+                        fg: th.text.body,
+                    })
+                    break
+                }
+
+                case "table": {
+                    const tableText = p.tableRows ? formatTable(p.tableRows) : p.text
+                    node = new TextRenderable(this.renderer, {
+                        id: `para-${i}`,
+                        ...textProps,
+                        content: `\n${tableText}\n`,
+                        fg: th.text.body,
+                    })
+                    break
+                }
+
+                case "note": {
+                    const icons: Record<string, string> = {
+                        tip: "💡", warning: "⚠️", note: "📝", important: "❗",
+                    }
+                    const colors: Record<string, string> = {
+                        tip: th.accent.green, warning: th.accent.amber,
+                        note: th.accent.cyan, important: th.accent.pink,
+                    }
+                    const kind = p.noteKind || "note"
+                    const icon = icons[kind] || "📝"
+                    const color = colors[kind] || th.accent.cyan
+                    node = new TextRenderable(this.renderer, {
+                        id: `para-${i}`,
+                        ...textProps,
+                        content: t`\n  ${fg(color)("┃")} ${icon} ${bold(fg(color)(kind.toUpperCase()))}\n  ${fg(color)("┃")} ${fg(th.text.body)(p.text)}\n`,
+                    })
+                    break
+                }
+
+                case "footnote": {
+                    const ref = p.footnoteRef ? `[${p.footnoteRef}]` : ""
+                    node = new TextRenderable(this.renderer, {
+                        id: `para-${i}`,
+                        ...textProps,
+                        content: t`\n  ${fg(th.accent.cyan)("─")} ${fg(th.text.subtle)(`📎 ${ref}`)} ${italic(fg(th.text.muted)(p.text))}\n`,
+                    })
+                    break
+                }
+
+                default: {
+                    // Regular paragraph — style inline code markers
+                    let content = p.text || ""
+                    if (content.includes("`")) {
+                        // Replace `code` backtick markers with styled inline code
+                        content = content.replace(/`([^`]+)`/g, (_, code) => {
+                            return `\x1b[36m\x1b[48;5;236m ${code} \x1b[0m`
+                        })
+                        node = new TextRenderable(this.renderer, {
+                            id: `para-${i}`,
+                            ...textProps,
+                            content: content ? `\n${content}\n` : "",
+                        })
+                    } else {
+                        node = new TextRenderable(this.renderer, {
+                            id: `para-${i}`,
+                            ...textProps,
+                            content: content ? `\n${content}\n` : "",
+                            fg: th.text.body,
+                        })
+                    }
+                    break
+                }
+            }
+
             this.readingPane.add(node)
             this.chapterTextNodes.push(node)
             this.paraNodes.push(node)
@@ -412,34 +559,53 @@ export class ReaderView {
         for (const hl of highlights) {
             const node = this.paraNodes[hl.paragraph_index]
             if (node) {
-                node.bg = th.accent.amber + "30" // semi-transparent amber tint
+                node.bg = this.getHighlightBgColor(hl.color, th) + "30"
             }
         }
 
-        // Scroll to top of new chapter
-        this.readingPane.scrollTo(0)
+        // Restore saved scroll position on initial chapter load, otherwise scroll to top
+        if (this.initialChapterLoad && this.savedScrollPosition > 0) {
+            this.initialChapterLoad = false
+            // Use a short delay to allow the layout to settle before scrolling
+            setTimeout(() => {
+                this.readingPane.scrollTo(this.savedScrollPosition)
+                // Update status bar and save progress AFTER scroll is restored
+                this.updateStatusProgress()
+            }, 50)
 
-        // Update sidebar highlighting
-        this.renderSidebarChapters()
+            // Update sidebar highlighting immediately
+            this.renderSidebarChapters()
+        } else {
+            this.initialChapterLoad = false
+            this.readingPane.scrollTo(0)
 
-        // Update status bar
-        this.updateStatusProgress()
+            // Update sidebar highlighting
+            this.renderSidebarChapters()
 
-        // Update reading estimate (words remaining in chapter)
-        const totalChWords = this.chapterWordCountCache.get(this.currentChapter) || 0
-        const wordsLeft = Math.max(0, totalChWords)
-        this.statusBar.setReadingEstimate(wordsLeft)
-
-        // Save progress to DB
-        updateReadingProgress(this.book.id, this.currentChapter, 0)
+            // Update status bar
+            this.updateStatusProgress()
+        }
     }
 
     // ── Progress ────────────────────────────────────────────────
 
     private updateStatusProgress() {
+        if (this.destroyed) return
+
         const percent = this.parsedBook.chapters.length > 0
             ? Math.round(((this.currentChapter + 1) / this.parsedBook.chapters.length) * 100)
             : 0
+
+        // Calculate chapter scroll percentage
+        const scrollHeight = this.readingPane.scrollHeight
+        const chapterPercent = scrollHeight > 0
+            ? Math.min(100, Math.round((this.readingPane.scrollTop / Math.max(1, scrollHeight - (this.readingPane.viewport?.height || 1))) * 100))
+            : 0
+
+        // Track chapter completion
+        if (chapterPercent >= 95) {
+            this.completedChapters.add(this.currentChapter)
+        }
 
         // Calculate time info
         const minutesElapsed = (Date.now() - this.readStartTime) / 60000
@@ -447,7 +613,7 @@ export class ReaderView {
         if (minutesElapsed >= 0.5 && this.wordsReadThisSession > 50) {
             const wpm = this.wordsReadThisSession / minutesElapsed
             const totalChapterWords = this.chapterWordCountCache.get(this.currentChapter) || 0
-            const progressRatio = this.readingPane.scrollHeight > 0 ? (this.readingPane.scrollTop / this.readingPane.scrollHeight) : 0
+            const progressRatio = scrollHeight > 0 ? (this.readingPane.scrollTop / scrollHeight) : 0
             const wordsLeft = totalChapterWords * (1 - progressRatio)
             const minsLeft = Math.ceil(wordsLeft / wpm)
             timeInfo = `${minsLeft}m left`
@@ -457,8 +623,20 @@ export class ReaderView {
             this.currentChapter,
             this.parsedBook.chapters.length,
             percent,
-            timeInfo
+            timeInfo,
+            chapterPercent
         )
+
+        // Continuously save scroll position so we can resume later
+        this.saveScrollPosition()
+    }
+
+    /** Persist current scroll position to the database */
+    private saveScrollPosition() {
+        if (this.destroyed) return
+        if (this.readingPane) {
+            updateReadingProgress(this.book.id, this.currentChapter, this.readingPane.scrollTop)
+        }
     }
 
     // ── Chapter navigation ──────────────────────────────────────
@@ -475,6 +653,9 @@ export class ReaderView {
             return
         }
 
+        // Save current chapter scroll position to memory
+        this.chapterScrollMemory.set(this.currentChapter, this.readingPane.scrollTop)
+
         // Track words read for the chapter we're leaving
         const leavingWords = this.chapterWordCountCache.get(this.currentChapter) || 0
         this.wordsReadThisSession += leavingWords
@@ -487,6 +668,14 @@ export class ReaderView {
 
         this.currentChapter = newChapter
         this.renderChapter()
+
+        // Restore saved scroll position for this chapter if we've visited it before
+        const savedPos = this.chapterScrollMemory.get(newChapter)
+        if (savedPos !== undefined && savedPos > 0) {
+            setTimeout(() => {
+                this.readingPane.scrollTo(savedPos)
+            }, 50)
+        }
     }
 
     // ── Zoom (text width) ───────────────────────────────────────
@@ -617,6 +806,15 @@ export class ReaderView {
 
         if (totalWords > 0 || minutesRead > 0) {
             recordReading(this.book.id, totalWords, Math.max(1, minutesRead))
+            // Record session history for timeline
+            recordSession(
+                this.book.id,
+                this.book.title,
+                this.startChapter,
+                this.currentChapter,
+                totalWords,
+                Math.max(1, minutesRead),
+            )
         }
     }
 
@@ -694,6 +892,26 @@ export class ReaderView {
                     case "P": // TTS
                         this.toggleTTS(true)
                         return true
+                    // Multi-color highlight selection (1-4)
+                    case "1":
+                        this.highlightColor = "yellow"
+                        showToast(this.renderer, "🟡 Highlight color: Yellow", "info")
+                        return true
+                    case "2":
+                        this.highlightColor = "green"
+                        showToast(this.renderer, "🟢 Highlight color: Green", "info")
+                        return true
+                    case "3":
+                        this.highlightColor = "blue"
+                        showToast(this.renderer, "🔵 Highlight color: Blue", "info")
+                        return true
+                    case "4":
+                        this.highlightColor = "pink"
+                        showToast(this.renderer, "🩷 Highlight color: Pink", "info")
+                        return true
+                    case "n": // Add note to highlight
+                        this.highlightWithNote()
+                        return true
                 }
                 return true // consume all other input in select mode
             }
@@ -712,11 +930,26 @@ export class ReaderView {
                 case " ": // space — page down
                     this.readingPane.scrollBy(1, "viewport")
                     return true
+                // Half-page scroll (Vim standard)
+                case "\x04": // Ctrl+d — half page down
+                    this.readingPane.scrollBy(Math.floor((this.readingPane.viewport?.height || 20) / 2))
+                    return true
+                case "\x15": // Ctrl+u — half page up
+                    this.readingPane.scrollBy(-Math.floor((this.readingPane.viewport?.height || 20) / 2))
+                    return true
                 case "G": // go to end
                     this.readingPane.scrollTo({ x: 0, y: this.readingPane.scrollHeight })
                     return true
                 case "g": // go to top
                     this.readingPane.scrollTo(0)
+                    return true
+
+                // Search match navigation
+                case "n": // next search match
+                    this.jumpToNextSearchMatch(1)
+                    return true
+                case "N": // previous search match
+                    this.jumpToNextSearchMatch(-1)
                     return true
 
                 // Chapter navigation
@@ -846,9 +1079,20 @@ export class ReaderView {
                     this.sidebar.width = this.sidebarVisible ? 20 : 0
                     return true
 
+                // Deep link — copy paragraph position to clipboard
+                case "L":
+                    this.copyDeepLink()
+                    return true
+
+                // Export all annotations
+                case "X":
+                    this.exportAllAnnotationsAction()
+                    return true
+
                 // Quit
                 case "q":
                     if (this.timerInterval) clearInterval(this.timerInterval)
+                    this.saveScrollPosition()
                     this.recordSessionStats()
                     this.stopAutoScroll()
                     this.app.showLibrary()
@@ -894,9 +1138,14 @@ export class ReaderView {
                 this.currentChapter = chapterIndex
                 this.renderChapter()
             },
-            () => {
+            (lastQuery?: string) => {
                 this.modalOpen = false
                 this.readingPane.focus()
+                // Capture last search query for n/N navigation
+                if (lastQuery && lastQuery.length >= 2) {
+                    this.lastSearchQuery = lastQuery
+                    this.buildSearchMatches(lastQuery)
+                }
             },
         )
         this.searchModal.show(this.parsedBook)
@@ -1281,9 +1530,16 @@ export class ReaderView {
             this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix)
         }
 
-        // Scroll to keep cursor visible
+        // Only scroll if the cursor paragraph is outside the visible viewport
         const estimatedLine = this.getEstimatedLineOffset(this.selectParaIdx)
-        this.readingPane.scrollTo(Math.max(0, estimatedLine - 5))
+        const viewportTop = this.readingPane.scrollTop
+        const viewportHeight = this.readingPane.viewport?.height || 30
+        const viewportBottom = viewportTop + viewportHeight
+        
+        if (estimatedLine < viewportTop + 2 || estimatedLine > viewportBottom - 3) {
+            // Cursor is outside visible area — scroll to center it
+            this.readingPane.scrollTo(Math.max(0, estimatedLine - Math.floor(viewportHeight / 2)))
+        }
     }
 
     private applyHighlightToNode(node: any, para: any, th: any, prefix: string, highlighted: string, suffix: string) {
@@ -1303,6 +1559,31 @@ export class ReaderView {
                 node.content = restored.content
                 node.fg = restored.fg
             }
+        }
+
+        // Re-apply database highlights that were cleared by restoreParagraph
+        this.reapplyDatabaseHighlights()
+    }
+
+    /** Re-apply persistent highlights from the database */
+    private reapplyDatabaseHighlights() {
+        const th = getTheme()
+        const highlights = getChapterHighlights(this.book.id, this.currentChapter)
+        for (const hl of highlights) {
+            const node = this.paraNodes[hl.paragraph_index]
+            if (node) {
+                node.bg = this.getHighlightBgColor(hl.color, th) + "30"
+            }
+        }
+    }
+
+    /** Map highlight color name to theme color */
+    private getHighlightBgColor(color: string, th: any): string {
+        switch (color) {
+            case "green": return th.accent.green
+            case "blue": return th.accent.blue
+            case "pink": return th.accent.pink
+            default: return th.accent.amber
         }
     }
 
@@ -1367,6 +1648,11 @@ export class ReaderView {
                 node.content = t`\n  ${fg(color)("┃")} ${icon} ${bold(fg(color)(kind.toUpperCase()))}\n  ${fg(color)("┃")} ${fg(th.text.body)(para.text)}\n`
                 break
             }
+            case "footnote": {
+                const ref = para.footnoteRef ? `[${para.footnoteRef}]` : ""
+                node.content = t`\n  ${fg(th.accent.cyan)("─")} ${fg(th.text.subtle)(`📎 ${ref}`)} ${italic(fg(th.text.muted)(para.text))}\n`
+                break
+            }
             default: {
                 let content = para.text || ""
                 if (content.includes("`")) {
@@ -1378,6 +1664,16 @@ export class ReaderView {
                     node.content = content ? `\n${content}\n` : ""
                     node.fg = th.text.body
                 }
+                break
+            }
+        }
+
+        // Re-apply database highlight for this paragraph if it exists
+        const highlights = getChapterHighlights(this.book.id, this.currentChapter)
+        for (const hl of highlights) {
+            if (hl.paragraph_index === paraIdx) {
+                const th2 = getTheme()
+                node.bg = this.getHighlightBgColor(hl.color, th2) + "30"
                 break
             }
         }
@@ -1593,17 +1889,136 @@ export class ReaderView {
             this.currentChapter,
             sp,
             selectedText,
-            "yellow",
+            this.highlightColor,
         )
 
-        showToast(this.renderer, `📌 Highlighted: "${selectedText.slice(0, 35)}${selectedText.length > 35 ? "…" : ""}"`, "success")
+        const colorIcons: Record<string, string> = { yellow: "🟡", green: "🟢", blue: "🔵", pink: "🩷" }
+        const icon = colorIcons[this.highlightColor] || "📌"
+        showToast(this.renderer, `${icon} Highlighted (${this.highlightColor}): "${selectedText.slice(0, 30)}${selectedText.length > 30 ? "…" : ""}"`, "success")
         this.exitSelectMode()
         this.renderChapter()
+    }
+
+    /** Add a highlighted note — highlight with an inline note annotation */
+    private highlightWithNote() {
+        const selectedText = this.getSelectedText()
+        if (!selectedText) {
+            showToast(this.renderer, "Select text first (v for visual mode)", "error")
+            return
+        }
+
+        const { sp } = this.getSelectionRange()
+
+        // Use a simple prompt approach — save highlight with a placeholder note
+        // and show toast instructing user to edit in annotations panel
+        addHighlight(
+            this.book.id,
+            this.currentChapter,
+            sp,
+            selectedText,
+            this.highlightColor,
+            "📝 Note added",
+        )
+
+        showToast(this.renderer, `📝 Highlighted with note — press N to view/edit annotations`, "success")
+        this.exitSelectMode()
+        this.renderChapter()
+    }
+
+    // ── Search match navigation (n/N) ──────────────────────────────
+
+    private buildSearchMatches(query: string) {
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter) return
+
+        this.searchMatches = []
+        const q = query.toLowerCase()
+
+        for (let pi = 0; pi < chapter.paragraphs.length; pi++) {
+            const text = chapter.paragraphs[pi]?.text || ""
+            const lower = text.toLowerCase()
+            let idx = 0
+            while ((idx = lower.indexOf(q, idx)) !== -1) {
+                this.searchMatches.push({ paraIdx: pi, charIdx: idx })
+                idx += q.length
+            }
+        }
+
+        this.searchMatchIndex = -1
+        if (this.searchMatches.length > 0) {
+            showToast(this.renderer, `🔍 ${this.searchMatches.length} matches in this chapter — n/N to navigate`, "info")
+        }
+    }
+
+    private jumpToNextSearchMatch(delta: number) {
+        if (!this.lastSearchQuery || this.searchMatches.length === 0) {
+            showToast(this.renderer, "No search results — press / to search first", "info")
+            return
+        }
+
+        this.searchMatchIndex += delta
+        if (this.searchMatchIndex >= this.searchMatches.length) this.searchMatchIndex = 0
+        if (this.searchMatchIndex < 0) this.searchMatchIndex = this.searchMatches.length - 1
+
+        const match = this.searchMatches[this.searchMatchIndex]
+        if (!match) return
+
+        // Scroll to the match
+        const estimatedLine = this.getEstimatedLineOffset(match.paraIdx)
+        const viewportHeight = this.readingPane.viewport?.height || 30
+        this.readingPane.scrollTo(Math.max(0, estimatedLine - Math.floor(viewportHeight / 3)))
+
+        showToast(this.renderer, `🔍 Match ${this.searchMatchIndex + 1}/${this.searchMatches.length}`, "info")
+    }
+
+    // ── Deep Link ───────────────────────────────────────────────
+
+    private async copyDeepLink() {
+        // Estimate current paragraph from scroll position
+        const viewportTop = this.readingPane.scrollTop
+        let currentPara = 0
+        for (let i = 0; i < this.paraNodes.length; i++) {
+            const offset = this.getEstimatedLineOffset(i)
+            if (offset > viewportTop) break
+            currentPara = i
+        }
+
+        const link = generateDeepLink(this.book.id, this.currentChapter, currentPara)
+        const success = await copyDeepLinkToClipboard(link)
+        if (success) {
+            showToast(this.renderer, `📎 Copied: ${link}`, "success")
+        } else {
+            showToast(this.renderer, `📎 Link: ${link} (clipboard unavailable)`, "info")
+        }
+    }
+
+    // ── Cross-book export ───────────────────────────────────────
+
+    private exportAllAnnotationsAction() {
+        const result = exportAllAnnotations()
+        if (result.success) {
+            showToast(this.renderer, `📝 Exported ${result.count} annotations → ${result.path}`, "success")
+        } else {
+            showToast(this.renderer, `Export failed: ${result.error}`, "error")
+        }
     }
 
     // ── Cleanup ─────────────────────────────────────────────────
 
     destroy() {
+        // Guard against double-destroy and stop all timers first
+        if (this.destroyed) return
+        this.saveScrollPosition()
+        this.destroyed = true
+
+        if (this.timerInterval) {
+            clearInterval(this.timerInterval)
+            this.timerInterval = null
+        }
+        if (this.minimapInterval) {
+            clearInterval(this.minimapInterval)
+            this.minimapInterval = null
+        }
         if (this.inputHandler) {
             this.renderer.removeInputHandler(this.inputHandler)
         }

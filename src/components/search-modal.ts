@@ -29,12 +29,12 @@ export class SearchModal {
     private selectedIndex = 0
     private resultCards: BoxRenderable[] = []
     private onSelect: (chapterIndex: number) => void
-    private onClose: () => void
+    private onClose: (lastQuery?: string) => void
 
     constructor(
         renderer: CliRenderer,
         onSelect: (chapterIndex: number) => void,
-        onClose: () => void,
+        onClose: (lastQuery?: string) => void,
     ) {
         this.renderer = renderer
         this.onSelect = onSelect
@@ -294,8 +294,9 @@ export class SearchModal {
     hide() {
         if (!this.visible) return
         this.visible = false
+        const lastQuery = this.input?.value?.trim() || ""
         try { this.renderer.root.remove(this.container.id) } catch { }
-        this.onClose()
+        this.onClose(lastQuery)
     }
 
     destroy() {

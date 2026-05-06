@@ -7,7 +7,7 @@
 import { parse as parseHTML } from "node-html-parser"
 
 export interface StyledParagraph {
-    type: "heading" | "paragraph" | "quote" | "separator" | "list-item" | "code" | "table" | "note"
+    type: "heading" | "paragraph" | "quote" | "separator" | "list-item" | "code" | "table" | "note" | "footnote"
     text: string
     level?: number  // heading level (1-6)
     indent?: number // nesting depth for lists
@@ -16,6 +16,7 @@ export interface StyledParagraph {
     language?: string // programming language for code blocks
     tableRows?: string[][] // parsed table data for table type
     noteKind?: "tip" | "warning" | "note" | "important" // callout type
+    footnoteRef?: string // footnote reference ID
 }
 
 /**
@@ -79,6 +80,19 @@ export function htmlToStyledParagraphs(html: string): StyledParagraph[] {
         // ── HR / separators ──
         if (tag === "hr") {
             paragraphs.push({ type: "separator", text: "" })
+            return
+        }
+
+        // ── Footnotes (aside/section with epub:type or role) ──
+        if ((tag === "aside" || tag === "section" || tag === "div") &&
+            (node.getAttribute?.("epub:type")?.includes("footnote") ||
+             node.getAttribute?.("role") === "doc-footnote" ||
+             node.getAttribute?.("role") === "doc-endnote")) {
+            const id = node.getAttribute?.("id") || ""
+            const text = cleanText(node.textContent)
+            if (text) {
+                paragraphs.push({ type: "footnote", text, footnoteRef: id })
+            }
             return
         }
 
@@ -341,6 +355,22 @@ function cleanTextWithInlineCode(node: any): string {
 
         // Skip images, scripts, styles
         if (tag === "img" || tag === "script" || tag === "style") return
+
+        // ── Footnote references (superscript links) ──
+        if (tag === "sup" || (tag === "a" &&
+            (node.getAttribute?.("epub:type")?.includes("noteref") ||
+             node.getAttribute?.("role") === "doc-noteref"))) {
+            const href = node.getAttribute?.("href") || ""
+            if (href.includes("note") || href.includes("fn") || href.includes("footnote") ||
+                node.getAttribute?.("epub:type")?.includes("noteref")) {
+                const ref = href.replace(/^#/, "")
+                const text = node.textContent?.trim() || ""
+                if (text) {
+                    parts.push(`[${text}]`)
+                    return
+                }
+            }
+        }
 
         // Recurse
         for (const child of n.childNodes || []) {

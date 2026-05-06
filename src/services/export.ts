@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "fs"
 import { join, basename } from "path"
 import { homedir } from "os"
-import { getBookmarks, type BookmarkRecord, type BookRecord } from "./database"
+import { getBookmarks, getAllHighlightsWithBooks, type BookmarkRecord, type BookRecord, type CrossBookHighlight } from "./database"
 import type { ParsedBook } from "./epub-parser"
 
 export interface ExportOptions {
@@ -139,6 +139,75 @@ export function exportBook(
             path: "",
             success: false,
             error: err instanceof Error ? err.message : String(err),
+        }
+    }
+}
+
+/**
+ * Export all annotations across all books as a single markdown file
+ */
+export function exportAllAnnotations(
+    outputDir?: string,
+): { path: string; success: boolean; error?: string; count: number } {
+    const dir = outputDir || defaultOptions.outputDir
+    try {
+        if (!existsSync(dir)) {
+            mkdirSync(dir, { recursive: true })
+        }
+
+        const highlights = getAllHighlightsWithBooks()
+        if (highlights.length === 0) {
+            return { path: "", success: false, error: "No annotations found", count: 0 }
+        }
+
+        const filePath = join(dir, "All Annotations.md")
+        let content = ""
+
+        content += "---\n"
+        content += `title: "TBook — All Annotations"\n`
+        content += `exported: ${new Date().toISOString().slice(0, 10)}\n`
+        content += `total_annotations: ${highlights.length}\n`
+        content += "tags:\n  - annotations\n  - reading\n"
+        content += "---\n\n"
+
+        content += `# 📝 All Annotations (${highlights.length})\n\n`
+        content += `*Exported on ${new Date().toLocaleDateString()}*\n\n---\n\n`
+
+        // Group by book
+        const byBook = new Map<string, CrossBookHighlight[]>()
+        for (const hl of highlights) {
+            const key = `${hl.book_title} — ${hl.book_author}`
+            const list = byBook.get(key) || []
+            list.push(hl)
+            byBook.set(key, list)
+        }
+
+        const colorIcons: Record<string, string> = { yellow: "🟡", green: "🟢", blue: "🔵", pink: "🩷" }
+
+        for (const [bookKey, hls] of byBook) {
+            content += `## 📖 ${bookKey}\n\n`
+
+            for (const hl of hls) {
+                const icon = colorIcons[hl.color] || "📌"
+                const date = hl.created_at ? new Date(hl.created_at).toLocaleDateString() : ""
+                content += `- ${icon} **Ch.${hl.chapter + 1}** — "${hl.text.slice(0, 100)}${hl.text.length > 100 ? "…" : ""}"`
+                if (date) content += ` *(${date})*`
+                content += "\n"
+                if (hl.note) {
+                    content += `  - 💬 *${hl.note}*\n`
+                }
+            }
+            content += "\n"
+        }
+
+        writeFileSync(filePath, content, "utf-8")
+        return { path: filePath, success: true, count: highlights.length }
+    } catch (err) {
+        return {
+            path: "",
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+            count: 0,
         }
     }
 }

@@ -134,6 +134,20 @@ export function getDb(): Database {
     )
   `)
 
+    db.run(`
+    CREATE TABLE IF NOT EXISTS session_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+      book_title TEXT NOT NULL,
+      start_chapter INTEGER NOT NULL DEFAULT 0,
+      end_chapter INTEGER NOT NULL DEFAULT 0,
+      words_read INTEGER DEFAULT 0,
+      minutes_read INTEGER DEFAULT 0,
+      started_at TEXT DEFAULT (datetime('now')),
+      ended_at TEXT DEFAULT (datetime('now'))
+    )
+  `)
+
     return db
 }
 
@@ -358,4 +372,76 @@ export function getVocabulary(): VocabRecord[] {
 export function removeVocabWord(word: string): void {
     const db = getDb()
     db.run("DELETE FROM vocabulary WHERE word = ?", [word.toLowerCase()])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Session History
+// ─────────────────────────────────────────────────────────────
+
+export interface SessionHistoryRecord {
+    id: number
+    book_id: number
+    book_title: string
+    start_chapter: number
+    end_chapter: number
+    words_read: number
+    minutes_read: number
+    started_at: string
+    ended_at: string
+}
+
+export function recordSession(
+    bookId: number,
+    bookTitle: string,
+    startChapter: number,
+    endChapter: number,
+    wordsRead: number,
+    minutesRead: number,
+): void {
+    const db = getDb()
+    db.run(
+        `INSERT INTO session_history (book_id, book_title, start_chapter, end_chapter, words_read, minutes_read)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [bookId, bookTitle, startChapter, endChapter, wordsRead, minutesRead],
+    )
+}
+
+export function getSessionHistory(limit: number = 20): SessionHistoryRecord[] {
+    const db = getDb()
+    return db.query(
+        "SELECT * FROM session_history ORDER BY ended_at DESC LIMIT ?"
+    ).all(limit) as SessionHistoryRecord[]
+}
+
+// ─────────────────────────────────────────────────────────────
+// Cross-Book Annotations
+// ─────────────────────────────────────────────────────────────
+
+export interface CrossBookHighlight extends HighlightRecord {
+    book_title: string
+    book_author: string
+}
+
+export function getAllHighlightsWithBooks(): CrossBookHighlight[] {
+    const db = getDb()
+    return db.query(
+        `SELECT h.*, b.title as book_title, b.author as book_author
+         FROM highlights h
+         JOIN books b ON h.book_id = b.id
+         ORDER BY h.created_at DESC`
+    ).all() as CrossBookHighlight[]
+}
+
+// ─────────────────────────────────────────────────────────────
+// Reading Goal Progress
+// ─────────────────────────────────────────────────────────────
+
+export function getTodayStats(): { words_read: number; minutes_read: number } {
+    const db = getDb()
+    const today = new Date().toISOString().slice(0, 10)
+    const result = db.query(
+        `SELECT COALESCE(SUM(words_read), 0) as words_read, COALESCE(SUM(minutes_read), 0) as minutes_read
+         FROM reading_stats WHERE date = ?`
+    ).get(today) as { words_read: number; minutes_read: number } | null
+    return result || { words_read: 0, minutes_read: 0 }
 }
