@@ -18,6 +18,10 @@ export interface TBookConfig {
     scanDepth: number          // max directory depth for import scan (1-8)
     recentScanPaths: string[]  // last N scanned directories
     lineSpacing: number        // 0=compact, 1=normal, 2=loose
+    aiProvider: "ollama" | "openai"
+    aiModel: string
+    aiApiKey: string
+    aiBaseUrl: string
 }
 
 const CONFIG_PATH = join(homedir(), ".tbook", "config.json")
@@ -38,6 +42,10 @@ const DEFAULT_CONFIG: TBookConfig = {
     scanDepth: 3,
     recentScanPaths: [],
     lineSpacing: 1,
+    aiProvider: "ollama",
+    aiModel: "llama3",
+    aiApiKey: "",
+    aiBaseUrl: "http://localhost:11434",
 }
 
 let cachedConfig: TBookConfig | null = null

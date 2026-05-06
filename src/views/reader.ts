@@ -26,6 +26,9 @@ import { DictionaryModal } from "../components/dictionary-modal"
 import { VocabularyPanel } from "../components/vocabulary-panel"
 import { AnnotationsPanel } from "../components/annotations-panel"
 import { RsvpReader } from "../components/rsvp-reader"
+import { AiModal } from "../components/ai-modal"
+import { CodeModal } from "../components/code-modal"
+import { TTSService } from "../services/tts"
 import { exportBook } from "../services/export"
 import { loadConfig, updateConfig } from "../services/config"
 import type { App } from "../app"
@@ -53,7 +56,9 @@ export class ReaderView {
     private parsedBook!: ParsedBook
     private currentChapter = 0
     private sidebarVisible = true
+    private minimapVisible = false
     private chapterTextNodes: TextRenderable[] = []
+    private paraNodes: TextRenderable[] = []
     private sidebarItems: TextRenderable[] = []
 
     // Phase 2 state
@@ -76,18 +81,24 @@ export class ReaderView {
     private vocabularyPanel: VocabularyPanel | null = null
     private annotationsPanel: AnnotationsPanel | null = null
     private rsvpReader: RsvpReader | null = null
+    private aiModal: AiModal | null = null
+    private codeModal: CodeModal | null = null
+    private collapsedCodeBlocks = new Set<number>()
     private modalOpen = false
     private lastSelectedText = ""
     private focusMode = false
+    private minimapContainer!: BoxRenderable
+    private minimapContent!: TextRenderable
+    private minimapInterval: Timer | null = null
 
     private inputHandler?: (sequence: string) => boolean
 
     // Inline select mode / visual mode
     private selectMode = false
-    private visualMode = false  // true = extending a selection range
+    private visualMode = false
     private selectParaIdx = 0
-    private selectWordIdx = 0
-    private selectionAnchor: { paraIdx: number; wordIdx: number } | null = null
+    private selectCharIdx = 0
+    private selectionAnchor: { paraIdx: number; charIdx: number } | null = null
 
     constructor(renderer: CliRenderer, app: App) {
         this.renderer = renderer
@@ -246,11 +257,31 @@ export class ReaderView {
             },
         })
 
+        // ── Minimap ──
+        this.minimapContainer = new BoxRenderable(this.renderer, {
+            id: "minimap-container",
+            width: 3,
+            height: "100%",
+            flexDirection: "column",
+            backgroundColor: th.bg.void,
+            visible: this.minimapVisible,
+        })
+
+        this.minimapContent = new TextRenderable(this.renderer, {
+            id: "minimap-content",
+            content: "",
+        })
+        this.minimapContainer.add(this.minimapContent)
+
         // ── Status bar ──
         this.statusBar = new StatusBar({ renderer: this.renderer, mode: "reader" })
 
+        if (!this.sidebarVisible) this.sidebar.visible = false
+
         this.container.add(this.sidebar)
         this.container.add(this.readingPane)
+        this.container.add(this.minimapContainer)
+        
         this.renderer.root.add(this.container)
         this.renderer.root.add(this.statusBar.root)
 
@@ -328,6 +359,8 @@ export class ReaderView {
             try { this.readingPane.remove(node.id) } catch { }
         }
         this.chapterTextNodes = []
+        this.paraNodes = []
+        this.collapsedCodeBlocks.clear()
 
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter) return
@@ -362,6 +395,7 @@ export class ReaderView {
             const node = renderParagraph(this.renderer, p, i, th)
             this.readingPane.add(node)
             this.chapterTextNodes.push(node)
+            this.paraNodes.push(node)
 
             if (this.lineSpacing > 0 && p.type !== "separator") {
                 const spc = new TextRenderable(this.renderer, {
@@ -376,8 +410,7 @@ export class ReaderView {
         // Apply saved highlights from database
         const highlights = getChapterHighlights(this.book.id, this.currentChapter)
         for (const hl of highlights) {
-            const nodeIdx = hl.paragraph_index + 3 // 3 fixed nodes before paragraphs
-            const node = this.chapterTextNodes[nodeIdx]
+            const node = this.paraNodes[hl.paragraph_index]
             if (node) {
                 node.bg = th.accent.amber + "30" // semi-transparent amber tint
             }
@@ -611,11 +644,17 @@ export class ReaderView {
                         this.selectMoveParagraph(-1)
                         return true
                     case "l":
-                    case "\x1b[C": // right — next word
-                        this.selectMoveWord(1)
+                    case "\x1b[C": // right — next char
+                        this.selectMoveChar(1)
                         return true
                     case "h":
-                    case "\x1b[D": // left — prev word
+                    case "\x1b[D": // left — prev char
+                        this.selectMoveChar(-1)
+                        return true
+                    case "w": // advance word
+                        this.selectMoveWord(1)
+                        return true
+                    case "b": // prev word
                         this.selectMoveWord(-1)
                         return true
                     case " ": // space — advance word
@@ -624,6 +663,16 @@ export class ReaderView {
                     case "\r":
                     case "\n": // enter — confirm selection
                         this.confirmSelect()
+                        return true
+                    case "c":
+                    case "C": // copy
+                        this.copySelectedOrCode()
+                        return true
+                    case "-":
+                    case "_":
+                    case "+":
+                    case "=":
+                        this.toggleCodeCollapse()
                         return true
                     case "D":
                     case "d": // dictionary with selected word
@@ -636,6 +685,14 @@ export class ReaderView {
                     case "v": // toggle visual selection (set anchor)
                     case "V":
                         this.toggleVisualMode()
+                        return true
+                    case "E":
+                    case "e": // AI Explain
+                        this.showAiExplain()
+                        return true
+                    case "p":
+                    case "P": // TTS
+                        this.toggleTTS(true)
                         return true
                 }
                 return true // consume all other input in select mode
@@ -702,6 +759,12 @@ export class ReaderView {
                 case "T":
                     this.toggleTheme()
                     return true
+                    
+                // Minimap
+                case "m":
+                case "M":
+                    this.toggleMinimap()
+                    return true
 
                 // Bookmark (save)
                 case "b":
@@ -744,12 +807,22 @@ export class ReaderView {
 
                 // Phase 4: Export to Obsidian/Logseq
                 case "E":
+                    this.showAiSummarize()
+                    return true
+
+                // Actually map export to X since E is now AI
+                case "X":
                     this.exportToMarkdown()
                     return true
 
                 // Vocabulary panel
                 case "V":
                     this.showVocabulary()
+                    return true
+                    
+                case "p":
+                case "P":
+                    this.toggleTTS()
                     return true
 
                 // Annotations panel
@@ -934,6 +1007,39 @@ export class ReaderView {
         this.rsvpReader.show(chapter.paragraphs)
     }
 
+    private showAiSummarize() {
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter) return
+        
+        let text = ""
+        for(let i=0; i<Math.min(chapter.paragraphs.length, 100); i++) {
+            text += chapter.paragraphs[i]?.text + "\n\n"
+        }
+
+        this.modalOpen = true
+        this.aiModal = new AiModal(this.renderer, () => {
+            this.modalOpen = false
+            this.readingPane.focus()
+        })
+        this.aiModal.show("Summarize", text.trim())
+    }
+
+    private showAiExplain() {
+        const selectedText = this.getSelectedText().trim() || this.lastSelectedText
+        if (!selectedText) {
+            showToast(this.renderer, "No text selected to explain", "error")
+            return
+        }
+        
+        this.modalOpen = true
+        this.aiModal = new AiModal(this.renderer, () => {
+            this.modalOpen = false
+            this.readingPane.focus()
+        })
+        this.aiModal.show("Explain", selectedText)
+        this.exitSelectMode() // Close select mode when opening AI
+    }
+
     // ── Inline Select Mode / Visual Mode ─────────────────────────
 
     // Helper to accurately estimate line offset for a paragraph
@@ -991,12 +1097,12 @@ export class ReaderView {
             cumulativeLines += lines
         }
 
-        this.selectWordIdx = 0
+        this.selectCharIdx = 0
 
         // Find first paragraph with actual text starting from our estimate
         while (this.selectParaIdx < chapter.paragraphs.length) {
-            const words = this.getParaWords(this.selectParaIdx)
-            if (words.length > 0) break
+            const text = this.getParaText(this.selectParaIdx)
+            if (text.length > 0) break
             this.selectParaIdx++
         }
         
@@ -1004,8 +1110,8 @@ export class ReaderView {
         if (this.selectParaIdx >= chapter.paragraphs.length) {
             this.selectParaIdx = chapter.paragraphs.length - 1
             while (this.selectParaIdx >= 0) {
-                const words = this.getParaWords(this.selectParaIdx)
-                if (words.length > 0) break
+                const text = this.getParaText(this.selectParaIdx)
+                if (text.length > 0) break
                 this.selectParaIdx--
             }
         }
@@ -1013,7 +1119,7 @@ export class ReaderView {
         this.selectParaIdx = Math.max(0, this.selectParaIdx)
 
         this.statusBar.setMode("select")
-        showToast(this.renderer, "✎ SELECT — h/l word · j/k para · v visual · m mark · D dict · Esc exit", "info")
+        showToast(this.renderer, "✎ SELECT — h/l char · w/b word · j/k para · v visual · c copy · Enter open code · Esc exit", "info")
         this.renderSelection()
     }
 
@@ -1031,92 +1137,100 @@ export class ReaderView {
             this.clearAllSelectionHighlights()
             this.visualMode = false
             this.selectionAnchor = null
-            showToast(this.renderer, "✎ Visual off — single word cursor", "info")
+            showToast(this.renderer, "✎ Visual off — single char cursor", "info")
         } else {
             this.visualMode = true
-            this.selectionAnchor = { paraIdx: this.selectParaIdx, wordIdx: this.selectWordIdx }
+            this.selectionAnchor = { paraIdx: this.selectParaIdx, charIdx: this.selectCharIdx }
             showToast(this.renderer, "✎ VISUAL — move to extend selection · m mark · d dict · Esc cancel", "info")
         }
         this.renderSelection()
     }
 
-    private getParaWords(paraIdx: number): string[] {
+    private getParaText(paraIdx: number): string {
         const chapter = this.parsedBook.chapters[this.currentChapter]
-        if (!chapter) return []
+        if (!chapter) return ""
         const para = chapter.paragraphs[paraIdx]
-        if (!para || !para.text) return []
-        return para.text.split(/\s+/).filter(w => w.length > 0)
+        return para?.text || ""
     }
 
     /** Get ordered selection range */
-    private getSelectionRange(): { sp: number; sw: number; ep: number; ew: number } {
+    private getSelectionRange(): { sp: number; sc: number; ep: number; ec: number } {
         if (!this.visualMode || !this.selectionAnchor) {
-            return { sp: this.selectParaIdx, sw: this.selectWordIdx, ep: this.selectParaIdx, ew: this.selectWordIdx }
+            return { sp: this.selectParaIdx, sc: this.selectCharIdx, ep: this.selectParaIdx, ec: this.selectCharIdx }
         }
         const a = this.selectionAnchor
-        const c = { paraIdx: this.selectParaIdx, wordIdx: this.selectWordIdx }
-        if (a.paraIdx < c.paraIdx || (a.paraIdx === c.paraIdx && a.wordIdx <= c.wordIdx)) {
-            return { sp: a.paraIdx, sw: a.wordIdx, ep: c.paraIdx, ew: c.wordIdx }
+        const c = { paraIdx: this.selectParaIdx, charIdx: this.selectCharIdx }
+        if (a.paraIdx < c.paraIdx || (a.paraIdx === c.paraIdx && a.charIdx <= c.charIdx)) {
+            return { sp: a.paraIdx, sc: a.charIdx, ep: c.paraIdx, ec: c.charIdx }
         }
-        return { sp: c.paraIdx, sw: c.wordIdx, ep: a.paraIdx, ew: a.wordIdx }
+        return { sp: c.paraIdx, sc: c.charIdx, ep: a.paraIdx, ec: a.charIdx }
     }
 
     /** Extract text from the current selection range */
     private getSelectedText(): string {
-        const { sp, sw, ep, ew } = this.getSelectionRange()
+        const { sp, sc, ep, ec } = this.getSelectionRange()
         const result: string[] = []
         for (let pi = sp; pi <= ep; pi++) {
-            const words = this.getParaWords(pi)
-            const wStart = (pi === sp) ? sw : 0
-            const wEnd = (pi === ep) ? Math.min(ew, words.length - 1) : words.length - 1
-            for (let wi = wStart; wi <= wEnd; wi++) {
-                if (words[wi]) result.push(words[wi]!)
+            const text = this.getParaText(pi)
+            const cStart = (pi === sp) ? sc : 0
+            const cEnd = (pi === ep) ? ec : text.length - 1
+            if (cStart <= cEnd) {
+                result.push(text.slice(cStart, cEnd + 1))
             }
         }
-        return result.join(" ")
+        return result.join("\n")
     }
 
-    private selectMoveWord(delta: number) {
-        const words = this.getParaWords(this.selectParaIdx)
-        if (words.length === 0) return
+    private selectMoveChar(delta: number) {
+        const text = this.getParaText(this.selectParaIdx)
+        let newIdx = this.selectCharIdx + delta
 
-        const newIdx = this.selectWordIdx + delta
-
-        if (newIdx >= words.length) {
-            this.selectMoveParagraph(1)
+        if (newIdx >= text.length) {
+            this.selectMoveParagraph(1, true)
             return
         }
         if (newIdx < 0) {
-            const chapter = this.parsedBook.chapters[this.currentChapter]
-            if (!chapter) return
-            let prevIdx = this.selectParaIdx - 1
-            while (prevIdx >= 0 && this.getParaWords(prevIdx).length === 0) prevIdx--
-            if (prevIdx < 0) { this.selectWordIdx = 0; return }
-
-            if (!this.visualMode) this.restoreParagraph(this.selectParaIdx)
-            this.selectParaIdx = prevIdx
-            this.selectWordIdx = this.getParaWords(prevIdx).length - 1
-            this.renderSelection()
+            this.selectMoveParagraph(-1, true)
             return
         }
 
-        this.selectWordIdx = newIdx
+        this.selectCharIdx = newIdx
         this.renderSelection()
     }
 
-    private selectMoveParagraph(delta: number) {
+    private selectMoveWord(delta: number) {
+        const text = this.getParaText(this.selectParaIdx)
+        if (text.length === 0) return this.selectMoveParagraph(delta, true)
+
+        let i = this.selectCharIdx
+        if (delta > 0) {
+            while (i < text.length && text[i] !== ' ') i++
+            while (i < text.length && text[i] === ' ') i++
+            if (i >= text.length) return this.selectMoveParagraph(1, true)
+        } else {
+            i--
+            while (i >= 0 && text[i] === ' ') i--
+            while (i >= 0 && text[i] !== ' ') i--
+            i++ // Start of word
+            if (i < 0) return this.selectMoveParagraph(-1, true)
+        }
+        this.selectCharIdx = Math.max(0, Math.min(i, text.length - 1))
+        this.renderSelection()
+    }
+
+    private selectMoveParagraph(delta: number, jumpToEnd = false) {
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter) return
 
         let newIdx = this.selectParaIdx + delta
-        while (newIdx >= 0 && newIdx < chapter.paragraphs.length && this.getParaWords(newIdx).length === 0) {
+        while (newIdx >= 0 && newIdx < chapter.paragraphs.length && this.getParaText(newIdx).length === 0) {
             newIdx += delta
         }
         if (newIdx < 0 || newIdx >= chapter.paragraphs.length) return
 
         if (!this.visualMode) this.restoreParagraph(this.selectParaIdx)
         this.selectParaIdx = newIdx
-        this.selectWordIdx = 0
+        this.selectCharIdx = jumpToEnd && delta < 0 ? Math.max(0, this.getParaText(newIdx).length - 1) : 0
         this.renderSelection()
     }
 
@@ -1127,68 +1241,42 @@ export class ReaderView {
         if (!chapter) return
 
         if (this.visualMode && this.selectionAnchor) {
-            const { sp, sw, ep, ew } = this.getSelectionRange()
+            // Visual mode: highlight full range between anchor and cursor
+            this.clearAllSelectionHighlights()
+            const { sp, sc, ep, ec } = this.getSelectionRange()
 
-            // Dim all paragraphs first, then highlight selection
-            for (let pi = 0; pi < chapter.paragraphs.length; pi++) {
-                const nodeIdx = pi + 3
-                const node = this.chapterTextNodes[nodeIdx]
+            for (let pi = sp; pi <= ep; pi++) {
+                const text = this.getParaText(pi)
+                if (text.length === 0) continue
                 const para = chapter.paragraphs[pi]
-                if (!node || !para) continue
+                if (!para) continue
 
-                if (pi < sp || pi > ep) {
-                    // Outside selection range — dim
-                    dimParagraph(node, para, th)
-                } else {
-                    const words = this.getParaWords(pi)
-                    if (words.length === 0) continue
+                const node = this.paraNodes[pi]
+                if (!node) continue
 
-                    const wStart = (pi === sp) ? sw : 0
-                    const wEnd = (pi === ep) ? Math.min(ew, words.length - 1) : words.length - 1
+                const cStart = (pi === sp) ? sc : 0
+                const cEnd = (pi === ep) ? ec : text.length - 1
 
-                    const beforeParts: string[] = []
-                    const highlightedParts: string[] = []
-                    const afterParts: string[] = []
+                const prefix = text.slice(0, cStart)
+                const highlighted = text.slice(cStart, cEnd + 1)
+                const suffix = text.slice(cEnd + 1)
 
-                    for (let wi = 0; wi < words.length; wi++) {
-                        if (wi < wStart) beforeParts.push(words[wi]!)
-                        else if (wi <= wEnd) highlightedParts.push(words[wi]!)
-                        else afterParts.push(words[wi]!)
-                    }
-
-                    const prefix = beforeParts.length > 0 ? beforeParts.join(" ") + " " : ""
-                    const highlighted = highlightedParts.join(" ")
-                    const suffix = afterParts.length > 0 ? " " + afterParts.join(" ") : ""
-
-                    this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix)
-                }
+                this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix)
             }
         } else {
-            // Select mode: single word cursor with dimmed surrounding paragraphs
-            for (let pi = 0; pi < chapter.paragraphs.length; pi++) {
-                const nodeIdx = pi + 3
-                const node = this.chapterTextNodes[nodeIdx]
-                const para = chapter.paragraphs[pi]
-                if (!node || !para) continue
-
-                if (pi !== this.selectParaIdx) {
-                    dimParagraph(node, para, th)
-                }
-            }
-
-            const words = this.getParaWords(this.selectParaIdx)
-            if (words.length === 0) return
-            this.selectWordIdx = Math.max(0, Math.min(this.selectWordIdx, words.length - 1))
+            // Select mode: single char cursor
+            const text = this.getParaText(this.selectParaIdx)
+            if (text.length === 0) return
+            this.selectCharIdx = Math.max(0, Math.min(this.selectCharIdx, text.length - 1))
 
             const para = chapter.paragraphs[this.selectParaIdx]
             if (!para) return
-            const nodeIdx = this.selectParaIdx + 3
-            const node = this.chapterTextNodes[nodeIdx]
+            const node = this.paraNodes[this.selectParaIdx]
             if (!node) return
 
-            const prefix = this.selectWordIdx > 0 ? words.slice(0, this.selectWordIdx).join(" ") + " " : ""
-            const highlighted = words[this.selectWordIdx]!
-            const suffix = this.selectWordIdx < words.length - 1 ? " " + words.slice(this.selectWordIdx + 1).join(" ") : ""
+            const prefix = text.slice(0, this.selectCharIdx)
+            const highlighted = text[this.selectCharIdx] || " "
+            const suffix = text.slice(this.selectCharIdx + 1)
 
             this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix)
         }
@@ -1225,23 +1313,261 @@ export class ReaderView {
         const para = chapter.paragraphs[paraIdx]
         if (!para) return
 
-        const nodeIdx = paraIdx + 3
-        const node = this.chapterTextNodes[nodeIdx]
+        const node = this.paraNodes[paraIdx]
         if (!node) return
 
-        const restored = renderParagraph(this.renderer, para, paraIdx, th)
-        node.content = restored.content
-        node.fg = restored.fg
+        // Restore original content (no ANSI highlights)
+        switch (para.type) {
+            case "heading":
+                node.content = t`\n\n${bold(fg(
+                    para.level === 1 ? th.accent.purple :
+                        para.level === 2 ? th.accent.blue :
+                            para.level === 3 ? th.accent.cyan :
+                                th.accent.green
+                )(para.text))}\n`
+                break
+            case "quote":
+                node.content = t`\n  ${fg(th.accent.cyan)("│")} ${italic(fg(th.text.muted)(para.text))}\n`
+                break
+            case "list-item": {
+                const indent = "  ".repeat((para.indent || 0) + 1)
+                let bullet: string
+                if (para.ordered) {
+                    bullet = `${para.index}.`
+                } else {
+                    const bullets = ["•", "◦", "▪", "▸"]
+                    bullet = bullets[Math.min(para.indent || 0, bullets.length - 1)]!
+                }
+                node.content = t`${indent}${fg(th.accent.cyan)(bullet)} ${fg(th.text.body)(para.text)}`
+                break
+            }
+            case "code": {
+                if (this.collapsedCodeBlocks.has(paraIdx)) {
+                    const lines = para.text.split("\n")
+                    const preview = lines.length > 2 ? lines.slice(0, 2).join("\n") + "\n..." : para.text
+                    node.content = this.formatCodeBlock(preview, (para.language || "code") + " (Collapsed)")
+                } else {
+                    node.content = this.formatCodeBlock(para.text, para.language)
+                }
+                node.fg = th.text.body
+                break
+            }
+            case "table": {
+                const tableText = para.tableRows ? formatTable(para.tableRows) : para.text
+                node.content = `\n${tableText}\n`
+                node.fg = th.text.body
+                break
+            }
+            case "note": {
+                const kind = para.noteKind || "note"
+                const icons: Record<string, string> = { tip: "💡", warning: "⚠️", note: "📝", important: "❗" }
+                const colors: Record<string, string> = { tip: th.accent.green, warning: th.accent.amber, note: th.accent.cyan, important: th.accent.pink }
+                const icon = icons[kind] || "📝"
+                const color = colors[kind] || th.accent.cyan
+                node.content = t`\n  ${fg(color)("┃")} ${icon} ${bold(fg(color)(kind.toUpperCase()))}\n  ${fg(color)("┃")} ${fg(th.text.body)(para.text)}\n`
+                break
+            }
+            default: {
+                let content = para.text || ""
+                if (content.includes("`")) {
+                    content = content.replace(/`([^`]+)`/g, (_: string, code: string) => {
+                        return `\x1b[36m\x1b[48;5;236m ${code} \x1b[0m`
+                    })
+                    node.content = content ? `\n${content}\n` : ""
+                } else {
+                    node.content = content ? `\n${content}\n` : ""
+                    node.fg = th.text.body
+                }
+                break
+            }
+        }
+    }
+
+    // ── Actions ──────────────────────────────────────────────────
+
+    private toggleMinimap() {
+        this.minimapVisible = !this.minimapVisible
+        this.minimapContainer.visible = this.minimapVisible
+        if (this.minimapVisible) {
+            this.updateMinimap()
+            this.minimapInterval = setInterval(() => this.updateMinimap(), 100)
+        } else {
+            if (this.minimapInterval) clearInterval(this.minimapInterval)
+            this.minimapInterval = null
+        }
+        showToast(this.renderer, this.minimapVisible ? "🗺️ Minimap ON" : "🗺️ Minimap OFF", "info")
+    }
+
+    private updateMinimap() {
+        if (!this.minimapVisible) return
+        
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter) return
+
+        const th = getTheme()
+        const P = chapter.paragraphs.length
+        if (P === 0) return
+
+        // Estimate available height
+        const H = Math.max(10, this.minimapContainer.height || 40)
+        
+        const lines: string[] = []
+        
+        const viewportTop = this.readingPane.scrollTop
+        const viewportBottom = viewportTop + this.readingPane.viewport.height
+
+        for (let l = 0; l < H; l++) {
+            const startP = Math.floor((l / H) * P)
+            const endP = Math.max(startP + 1, Math.floor(((l + 1) / H) * P))
+            
+            let char = "│"
+            let color = th.border.normal
+            let isVisible = false
+            
+            for (let p = startP; p < endP; p++) {
+                const para = chapter.paragraphs[p]
+                const node = this.paraNodes[p]
+                if (!para || !node) continue
+                
+                const nodeTop = node.y
+                const nodeBottom = nodeTop + (node.height || 1)
+                
+                if (nodeBottom >= viewportTop && nodeTop <= viewportBottom) {
+                    isVisible = true
+                }
+                
+                if (para.type === "heading") {
+                    char = "█"
+                    color = th.accent.cyan
+                } else if (para.type === "code" && char !== "█") {
+                    char = "■"
+                    color = th.accent.green
+                } else if (para.type === "quote" && char === "│") {
+                    char = "┃"
+                    color = th.accent.purple
+                } else if (char === "│" && para.text.length > 0) {
+                    char = "┃"
+                }
+            }
+            
+            if (isVisible) {
+                lines.push(` ${bg(th.bg.hover)(fg(th.text.body)(char))} `)
+            } else {
+                lines.push(` ${bg(th.bg.void)(fg(color)(char))} `)
+            }
+        }
+        
+        this.minimapContent.content = lines.join("\n")
+    }
+
+    private toggleTTS(selectionOnly = false) {
+        if (TTSService.isPlaying()) {
+            TTSService.stop()
+            showToast(this.renderer, "🔇 TTS stopped", "info")
+            return
+        }
+
+        let text = ""
+        if (selectionOnly) {
+            text = this.getSelectedText()
+            if (!text) text = this.getParaText(this.selectParaIdx)
+        } else {
+            const chapter = this.parsedBook.chapters[this.currentChapter]
+            if (chapter) {
+                text = chapter.paragraphs.map(p => p.text).join(" ")
+            }
+        }
+
+        const cleanText = text.replace(/[^a-zA-Z0-9 .,!?;:'"-]/g, "") // remove weird ansi/markdown chars
+        if (!cleanText.trim()) {
+            showToast(this.renderer, "Nothing to read", "error")
+            return
+        }
+
+        showToast(this.renderer, "🔊 Playing TTS...", "info")
+        TTSService.play(
+            cleanText, 
+            () => {
+                showToast(this.renderer, "🔇 TTS finished", "info")
+            },
+            () => {
+                showToast(this.renderer, "Failed to start TTS (is espeak/say installed?)", "error")
+            }
+        )
     }
 
     private confirmSelect() {
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter) return
+        const para = chapter.paragraphs[this.selectParaIdx]
+        
+        if (!this.visualMode && para?.type === "code") {
+            this.modalOpen = true
+            this.codeModal = new CodeModal(this.renderer, () => {
+                this.modalOpen = false
+                this.readingPane.focus()
+            })
+            this.codeModal.show(para.text, para.language)
+            return
+        }
+
         const selected = this.getSelectedText()
-        const clean = selected.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, "")
+        const clean = selected.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, "")
         if (clean) {
             this.lastSelectedText = clean
-            showToast(this.renderer, `✎ "${clean.slice(0, 40)}" selected — press D for dictionary`, "success")
+            showToast(this.renderer, `✎ "${truncate(clean, 40)}" selected — press D for dictionary`, "success")
         }
         this.exitSelectMode()
+    }
+
+    private toggleCodeCollapse() {
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter) return
+        const para = chapter.paragraphs[this.selectParaIdx]
+        
+        if (para?.type === "code") {
+            if (this.collapsedCodeBlocks.has(this.selectParaIdx)) {
+                this.collapsedCodeBlocks.delete(this.selectParaIdx)
+                showToast(this.renderer, "Code block expanded", "info")
+            } else {
+                this.collapsedCodeBlocks.add(this.selectParaIdx)
+                showToast(this.renderer, "Code block collapsed", "info")
+            }
+            this.restoreParagraph(this.selectParaIdx)
+            this.renderSelection()
+        }
+    }
+
+    private copySelectedOrCode() {
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter) return
+        const para = chapter.paragraphs[this.selectParaIdx]
+        
+        let textToCopy = ""
+        if (this.visualMode) {
+            textToCopy = this.getSelectedText().trim()
+        } else if (para?.type === "code") {
+            textToCopy = para.text
+        } else {
+            textToCopy = this.getParaText(this.selectParaIdx)
+        }
+
+        if (!textToCopy) {
+            showToast(this.renderer, "Nothing to copy", "error")
+            return
+        }
+
+        try {
+            const success = this.renderer.copyToClipboardOSC52(textToCopy)
+            if (success) {
+                showToast(this.renderer, "📋 Copied to clipboard", "success")
+                this.exitSelectMode()
+            } else {
+                showToast(this.renderer, "Terminal doesn't support clipboard (OSC52)", "error")
+            }
+        } catch (err) {
+            showToast(this.renderer, "Failed to copy", "error")
+        }
     }
 
     private confirmSelectAndDict() {

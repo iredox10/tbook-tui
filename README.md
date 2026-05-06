@@ -18,7 +18,9 @@ A premium **Terminal Book Reader** built with [OpenTUI](https://opentui.com) —
 - **Syntax Highlighting** — Auto-detects 10+ languages (Rust, Python, JS/TS, Go, Java, C, SQL, Bash…)
 - **Code Blocks** — Bordered boxes with language labels, line numbers, and colored syntax
 - **Inline Code** — `code` markers rendered with cyan background
-- **Tables** — HTML tables rendered with box-drawing characters
+- **Code Focus Mode** — `Enter` on a code block opens a non-wrapping horizontal-scroll modal
+- **Copy to Clipboard** — `c` copies code blocks or selected text to your system clipboard (OSC 52)
+- **Collapse Blocks** — `+` / `-` to collapse/expand long code blocks
 - **Callouts/Notes** — Tip, Warning, Note, Important admonitions with colored sidebar
 
 ### 🎨 Premium UI
@@ -28,6 +30,7 @@ A premium **Terminal Book Reader** built with [OpenTUI](https://opentui.com) —
 - **Toast Notifications** — Auto-dismissing feedback overlays
 
 ### 🔥 Power Features
+- **Visual Minimap** — `m` / `M` to toggle a structural sidebar minimap indicating scroll position
 - **Text Zoom** — `+`/`-` to adjust reading width (8 zoom levels)
 - **Auto-Scroll** — `a` to toggle, `A` to cycle speed (Slow/Normal/Fast/Rapid)
 - **Focus Mode** — `f` to hide sidebar & status bar for distraction-free reading
@@ -46,8 +49,11 @@ A premium **Terminal Book Reader** built with [OpenTUI](https://opentui.com) —
 - **Annotations Panel** — `N` views all highlights with jump-to-source
 - **RSVP Speed Reader** — `r` flashes words one at a time (50-1500 WPM)
 
-### 🧰 Advanced
-- **Obsidian/Logseq Export** — `E` exports notes & bookmarks as markdown with YAML frontmatter
+### 🤖 AI & Utilities
+- **AI Assistant** — `E` summarizes the chapter (Normal mode) or explains selections (Select mode)
+- **Multi-Provider AI** — Uses local Ollama by default, supports OpenAI via config
+- **Text-to-Speech (TTS)** — `p` / `P` reads chapters or selected paragraphs aloud natively
+- **Obsidian/Logseq Export** — `X` exports notes & bookmarks as markdown with YAML frontmatter
 - **Persistent Config** — Theme, zoom, scroll speed, export format saved to `~/.tbook/config.json`
 - **Session Persistence** — All preferences survive between sessions
 
@@ -99,6 +105,8 @@ brew install poppler
 | `A` | Cycle auto-scroll speed |
 | `f` | Toggle focus mode |
 | `T` | Toggle dark / light theme |
+| `m` / `M` | Toggle visual minimap |
+| `p` / `P` | Read chapter aloud (TTS) |
 | `t` | Chapter list (TOC modal) |
 | `/` | Search in book |
 | `b` | Add bookmark |
@@ -108,7 +116,8 @@ brew install poppler
 | `s` | Enter select mode |
 | `r` | RSVP speed reader |
 | `D` | Dictionary lookup |
-| `E` | Export to Obsidian/Logseq |
+| `E` | AI summarize chapter |
+| `X` | Export to Obsidian/Logseq |
 | `Tab` | Toggle chapter sidebar |
 | `?` | Help overlay |
 | `q` | Back to library |
@@ -116,11 +125,16 @@ brew install poppler
 ### Select Mode
 | Key | Action |
 |-----|--------|
-| `h` / `l` | Move cursor left / right (word) |
+| `h` / `l` | Move cursor left / right (character/word) |
 | `j` / `k` | Move cursor up / down (paragraph) |
 | `v` | Toggle visual mode (range select) |
 | `m` | Mark / highlight selection |
+| `c` | Copy selection or code block to clipboard |
+| `+` / `-` | Collapse / expand code block |
+| `p` | Read selection aloud (TTS) |
 | `d` | Dictionary lookup on word |
+| `E` | AI explain selection |
+| `Enter` | Confirm selection / Open Code Focus Modal |
 | `Esc` | Exit select mode |
 
 ### Library
