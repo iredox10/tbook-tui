@@ -119,5 +119,5 @@ export async function parseMd(filePath: string): Promise<ParsedBook> {
     pushChapter()
 
     const totalWords = chapters.reduce((sum, ch) => sum + ch.wordCount, 0)
-    return { metadata, chapters, totalWords }
+    return { metadata, chapters, totalWords, imageMap: new Map() }
 }

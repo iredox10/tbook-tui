@@ -26,6 +26,7 @@ export interface ParsedBook {
     metadata: BookMetadata
     chapters: Chapter[]
     totalWords: number
+    imageMap: Map<string, Buffer> // src URL -> image data
 }
 
 /**
@@ -58,8 +59,11 @@ export async function parseEpub(filePath: string): Promise<ParsedBook> {
                 return sum + p.text.split(/\s+/).filter(Boolean).length
             }, 0)
 
-            // Skip empty chapters (often just images or blank pages)
-            if (wordCount < 5 && paragraphs.length < 2) continue
+            // Count images
+            const imageCount = paragraphs.filter(p => p.type === "image").length
+
+            // Skip truly empty chapters (no text AND no images)
+            if (wordCount < 5 && paragraphs.length < 2 && imageCount === 0) continue
 
             // Try to get a title from the TOC
             const tocTitle = findTocTitle(epub, item.id) || `Chapter ${chapters.length + 1}`
@@ -79,7 +83,38 @@ export async function parseEpub(filePath: string): Promise<ParsedBook> {
 
     const totalWords = chapters.reduce((sum, ch) => sum + ch.wordCount, 0)
 
-    return { metadata, chapters, totalWords }
+    // Extract images from the epub manifest
+    const imageMap = new Map<string, Buffer>()
+    const manifest = epub.manifest || {}
+    const imageIds = Object.keys(manifest).filter(id => {
+        const mediaType = (manifest[id]?.['media-type'] || '').toLowerCase()
+        return mediaType.startsWith('image/')
+    })
+
+    // Extract each image (non-blocking, best-effort)
+    await Promise.allSettled(
+        imageIds.map(id => new Promise<void>((resolve) => {
+            try {
+                epub.getImage(id, (err: Error | null, data: Buffer, mimeType: string) => {
+                    if (!err && data) {
+                        const href = manifest[id]?.href || ''
+                        // Store with multiple possible key formats
+                        imageMap.set(href, data)
+                        // epub2 rewrites src to /images/id/path
+                        imageMap.set(`/images/${id}/${href}`, data)
+                        // Also store by just the filename part
+                        const fileName = href.split('/').pop() || ''
+                        if (fileName) imageMap.set(fileName, data)
+                    }
+                    resolve()
+                })
+            } catch {
+                resolve()
+            }
+        }))
+    )
+
+    return { metadata, chapters, totalWords, imageMap }
 }
 
 /**

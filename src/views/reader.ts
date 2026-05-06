@@ -30,6 +30,7 @@ import { RsvpReader } from "../components/rsvp-reader"
 import { AiModal } from "../components/ai-modal"
 import { CodeModal } from "../components/code-modal"
 import { TTSService } from "../services/tts"
+import { renderImageToTerminal, supportsImages } from "../utils/terminal-image"
 import { exportBook } from "../services/export"
 import { loadConfig, updateConfig } from "../services/config"
 import type { App } from "../app"
@@ -515,6 +516,39 @@ export class ReaderView {
                     break
                 }
 
+                case "image": {
+                    const src = p.imageSrc || ""
+                    const alt = p.imageAlt || p.text || "[Image]"
+
+                    // Try to find the image buffer from the parsed book
+                    const imageData = this.resolveImage(src)
+
+                    if (imageData && supportsImages()) {
+                        // Render actual image in terminal
+                        const terminalImage = renderImageToTerminal(imageData, {
+                            width: Math.min(60, (this.readingPane.viewport?.width || 80) - 10),
+                        })
+                        let imgContent = `\n${terminalImage}\n`
+                        if (alt && alt !== "[Image]") {
+                            imgContent += `  ↑ ${alt}\n`
+                        }
+                        node = new TextRenderable(this.renderer, {
+                            id: `para-${i}`,
+                            ...textProps,
+                            content: imgContent,
+                        })
+                    } else {
+                        // Fallback: show styled placeholder
+                        const caption = alt !== "[Image]" ? alt : p.text || "Image"
+                        node = new TextRenderable(this.renderer, {
+                            id: `para-${i}`,
+                            ...textProps,
+                            content: t`\n  ${fg(th.accent.cyan)("┌─────────────────────────────────┐")}\n  ${fg(th.accent.cyan)("│")}  ${fg(th.text.muted)("🖼️  ")}${fg(th.text.body)(caption.slice(0, 28).padEnd(28))} ${fg(th.accent.cyan)("│")}\n  ${fg(th.accent.cyan)("└─────────────────────────────────┘")}\n`,
+                        })
+                    }
+                    break
+                }
+
                 default: {
                     // Regular paragraph — style inline code markers
                     let content = p.text || ""
@@ -557,9 +591,22 @@ export class ReaderView {
         // Apply saved highlights from database
         const highlights = getChapterHighlights(this.book.id, this.currentChapter)
         for (const hl of highlights) {
-            const node = this.paraNodes[hl.paragraph_index]
-            if (node) {
-                node.bg = this.getHighlightBgColor(hl.color, th) + "30"
+            if (!hl.text) continue
+            const parts = hl.text.split("\n")
+            for (let i = 0; i < parts.length; i++) {
+                const textPart = parts[i]
+                if (!textPart) continue
+                const node = this.paraNodes[hl.paragraph_index + i]
+                if (node) {
+                    const bgColorCode = this.getHighlightBgColor(hl.color, th)
+                    const bgAnsi = this.hexToAnsiBg(bgColorCode)
+                    const fgAnsi = this.hexToAnsiFg(th.bg.void)
+                    const escapedText = textPart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                    const regex = new RegExp(escapedText, "g")
+                    node.content = String(node.content as any).replace(regex, (match: string) => {
+                        return `${bgAnsi}${fgAnsi}${match}\x1b[0m`
+                    })
+                }
             }
         }
 
@@ -821,9 +868,54 @@ export class ReaderView {
     // ── Keybinds ────────────────────────────────────────────────
 
     private setupKeybinds() {
-        this.inputHandler = (sequence: string) => {
+        const actionMap: Record<string, string> = {
+            "scroll_down": "j",
+            "scroll_up": "k",
+            "page_down": " ",
+            "half_page_down": "\x04",
+            "half_page_up": "\x15",
+            "jump_bottom": "G",
+            "jump_top": "g",
+            "next_chapter": "l",
+            "prev_chapter": "h",
+            "zoom_in": "+",
+            "zoom_out": "-",
+            "toggle_auto_scroll": "a",
+            "cycle_auto_scroll": "A",
+            "toggle_theme": "T",
+            "toggle_minimap": "m",
+            "add_bookmark": "b",
+            "view_bookmarks": "B",
+            "view_annotations": "H",
+            "view_toc": "t",
+            "search": "/",
+            "next_match": "n",
+            "prev_match": "N",
+            "select_mode": "s",
+            "speed_reader": "r",
+            "tts": "p",
+            "dictionary": "D",
+            "ai_summarize": "E",
+            "export_chapter": "x",
+            "export_all": "X",
+            "deep_link": "L",
+            "quit": "q"
+        }
+
+        this.inputHandler = (rawSequence: string) => {
             // Block all reader input while a modal is open
             if (this.modalOpen) return false
+
+            let sequence = rawSequence
+            const config = loadConfig()
+            if (config.customKeybinds) {
+                const mappedAction = Object.keys(config.customKeybinds).find(
+                    action => config.customKeybinds[action] === rawSequence
+                )
+                if (mappedAction && actionMap[mappedAction]) {
+                    sequence = actionMap[mappedAction]
+                }
+            }
 
             // ── SELECT MODE input handling ──
             if (this.selectMode) {
@@ -1043,8 +1135,8 @@ export class ReaderView {
                     this.showAiSummarize()
                     return true
 
-                // Actually map export to X since E is now AI
-                case "X":
+                // Actually map export to x since E is AI and X is cross-book export
+                case "x":
                     this.exportToMarkdown()
                     return true
 
@@ -1059,7 +1151,7 @@ export class ReaderView {
                     return true
 
                 // Annotations panel
-                case "N":
+                case "H":
                     this.showAnnotations()
                     return true
 
@@ -1405,7 +1497,15 @@ export class ReaderView {
     /** Get ordered selection range */
     private getSelectionRange(): { sp: number; sc: number; ep: number; ec: number } {
         if (!this.visualMode || !this.selectionAnchor) {
-            return { sp: this.selectParaIdx, sc: this.selectCharIdx, ep: this.selectParaIdx, ec: this.selectCharIdx }
+            const text = this.getParaText(this.selectParaIdx)
+            let sc = this.selectCharIdx
+            let ec = this.selectCharIdx
+            if (text && /[^\s]/.test(text[this.selectCharIdx] || "")) {
+                // Expand to word boundaries (non-whitespace)
+                while (sc > 0 && /[^\s]/.test(text[sc - 1] || "")) sc--
+                while (ec < text.length - 1 && /[^\s]/.test(text[ec + 1] || "")) ec++
+            }
+            return { sp: this.selectParaIdx, sc, ep: this.selectParaIdx, ec }
         }
         const a = this.selectionAnchor
         const c = { paraIdx: this.selectParaIdx, charIdx: this.selectCharIdx }
@@ -1570,9 +1670,22 @@ export class ReaderView {
         const th = getTheme()
         const highlights = getChapterHighlights(this.book.id, this.currentChapter)
         for (const hl of highlights) {
-            const node = this.paraNodes[hl.paragraph_index]
-            if (node) {
-                node.bg = this.getHighlightBgColor(hl.color, th) + "30"
+            if (!hl.text) continue
+            const parts = hl.text.split("\n")
+            for (let i = 0; i < parts.length; i++) {
+                const textPart = parts[i]
+                if (!textPart) continue
+                const node = this.paraNodes[hl.paragraph_index + i]
+                if (node) {
+                    const bgColorCode = this.getHighlightBgColor(hl.color, th)
+                    const bgAnsi = this.hexToAnsiBg(bgColorCode)
+                    const fgAnsi = this.hexToAnsiFg(th.bg.void)
+                    const escapedText = textPart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                    const regex = new RegExp(escapedText, "g")
+                    node.content = String(node.content as any).replace(regex, (match: string) => {
+                        return `${bgAnsi}${fgAnsi}${match}\x1b[0m`
+                    })
+                }
             }
         }
     }
@@ -1585,6 +1698,22 @@ export class ReaderView {
             case "pink": return th.accent.pink
             default: return th.accent.amber
         }
+    }
+
+    private hexToAnsiBg(hex: string) {
+        if (!hex || hex.length < 7) return ""
+        const r = parseInt(hex.slice(1, 3), 16)
+        const g = parseInt(hex.slice(3, 5), 16)
+        const b = parseInt(hex.slice(5, 7), 16)
+        return `\x1b[48;2;${r};${g};${b}m`
+    }
+    
+    private hexToAnsiFg(hex: string) {
+        if (!hex || hex.length < 7) return ""
+        const r = parseInt(hex.slice(1, 3), 16)
+        const g = parseInt(hex.slice(3, 5), 16)
+        const b = parseInt(hex.slice(5, 7), 16)
+        return `\x1b[38;2;${r};${g};${b}m`
     }
 
     private restoreParagraph(paraIdx: number) {
@@ -1653,6 +1782,26 @@ export class ReaderView {
                 node.content = t`\n  ${fg(th.accent.cyan)("─")} ${fg(th.text.subtle)(`📎 ${ref}`)} ${italic(fg(th.text.muted)(para.text))}\n`
                 break
             }
+            case "image": {
+                const src = para.imageSrc || ""
+                const alt = para.imageAlt || para.text || "[Image]"
+                const imageData = this.resolveImage(src)
+
+                if (imageData && supportsImages()) {
+                    const terminalImage = renderImageToTerminal(imageData, {
+                        width: Math.min(60, (this.readingPane.viewport?.width || 80) - 10),
+                    })
+                    let content = `\n${terminalImage}\n`
+                    if (alt && alt !== "[Image]") {
+                        content += `  ${fg(th.text.subtle)(italic(`↑ ${alt}`))}\n`
+                    }
+                    node.content = content
+                } else {
+                    const caption = alt !== "[Image]" ? alt : para.text || "Image"
+                    node.content = t`\n  ${fg(th.accent.cyan)("┌─────────────────────────────────┐")}\n  ${fg(th.accent.cyan)("│")}  ${fg(th.text.muted)("🖼️  ")}${fg(th.text.body)(caption.slice(0, 28).padEnd(28))} ${fg(th.accent.cyan)("│")}\n  ${fg(th.accent.cyan)("└─────────────────────────────────┘")}\n`
+                }
+                break
+            }
             default: {
                 let content = para.text || ""
                 if (content.includes("`")) {
@@ -1671,10 +1820,21 @@ export class ReaderView {
         // Re-apply database highlight for this paragraph if it exists
         const highlights = getChapterHighlights(this.book.id, this.currentChapter)
         for (const hl of highlights) {
-            if (hl.paragraph_index === paraIdx) {
+            if (!hl.text) continue
+            const parts = hl.text.split("\n")
+            const offset = paraIdx - hl.paragraph_index
+            if (offset >= 0 && offset < parts.length) {
+                const textPart = parts[offset]
+                if (!textPart) continue
                 const th2 = getTheme()
-                node.bg = this.getHighlightBgColor(hl.color, th2) + "30"
-                break
+                const bgColorCode = this.getHighlightBgColor(hl.color, th2)
+                const bgAnsi = this.hexToAnsiBg(bgColorCode)
+                const fgAnsi = this.hexToAnsiFg(th2.bg.void)
+                const escapedText = textPart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                const regex = new RegExp(escapedText, "g")
+                node.content = String(node.content as any).replace(regex, (match: string) => {
+                    return `${bgAnsi}${fgAnsi}${match}\x1b[0m`
+                })
             }
         }
     }
@@ -2001,6 +2161,39 @@ export class ReaderView {
         } else {
             showToast(this.renderer, `Export failed: ${result.error}`, "error")
         }
+    }
+
+    // ── Image resolution ────────────────────────────────────────
+
+    private resolveImage(src: string): Buffer | undefined {
+        if (!src || !this.parsedBook.imageMap) return undefined
+        const map = this.parsedBook.imageMap
+
+        // Try exact match
+        if (map.has(src)) return map.get(src)
+
+        // Try decoded URL
+        try {
+            const decoded = decodeURIComponent(src)
+            if (map.has(decoded)) return map.get(decoded)
+        } catch { }
+
+        // Try just the filename part
+        const fileName = src.split("/").pop() || ""
+        if (fileName && map.has(fileName)) return map.get(fileName)
+
+        // Try stripping leading /images/ prefix (epub2 format)
+        const stripped = src.replace(/^\/images\/[^/]+\//, "")
+        if (map.has(stripped)) return map.get(stripped)
+
+        // Try each key in map that ends with the same filename
+        for (const [key, buf] of map) {
+            if (key.endsWith(fileName) || key.endsWith(src.split("/").slice(-2).join("/"))) {
+                return buf
+            }
+        }
+
+        return undefined
     }
 
     // ── Cleanup ─────────────────────────────────────────────────

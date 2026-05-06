@@ -7,7 +7,7 @@
 import { parse as parseHTML } from "node-html-parser"
 
 export interface StyledParagraph {
-    type: "heading" | "paragraph" | "quote" | "separator" | "list-item" | "code" | "table" | "note" | "footnote"
+    type: "heading" | "paragraph" | "quote" | "separator" | "list-item" | "code" | "table" | "note" | "footnote" | "image"
     text: string
     level?: number  // heading level (1-6)
     indent?: number // nesting depth for lists
@@ -17,6 +17,8 @@ export interface StyledParagraph {
     tableRows?: string[][] // parsed table data for table type
     noteKind?: "tip" | "warning" | "note" | "important" // callout type
     footnoteRef?: string // footnote reference ID
+    imageSrc?: string // image source path/URL
+    imageAlt?: string // image alt text
 }
 
 /**
@@ -246,10 +248,51 @@ export function htmlToStyledParagraphs(html: string): StyledParagraph[] {
         }
 
         // ── Container elements — recurse into children ──
-        const containerTags = ["section", "article", "div", "main", "aside", "figure", "nav", "header", "footer", "details", "summary"]
+        const containerTags = ["section", "article", "div", "main", "aside", "nav", "header", "footer", "details", "summary"]
         if (containerTags.includes(tag)) {
             for (const child of node.childNodes) {
                 walkNode(child, depth)
+            }
+            return
+        }
+
+        // ── Figure — extract images and captions ──
+        if (tag === "figure") {
+            // Look for an img inside the figure
+            const imgNode = node.querySelector?.("img") || node.querySelector?.("image")
+            if (imgNode) {
+                const src = imgNode.getAttribute?.("src") || imgNode.getAttribute?.("xlink:href") || ""
+                const alt = imgNode.getAttribute?.("alt") || ""
+                const caption = node.querySelector?.("figcaption")?.textContent?.trim() || ""
+                const displayText = caption || alt || "[Image]"
+                paragraphs.push({ type: "image", text: displayText, imageSrc: src, imageAlt: alt })
+                return
+            }
+            // No img found, recurse normally
+            for (const child of node.childNodes) {
+                walkNode(child, depth)
+            }
+            return
+        }
+
+        // ── Standalone img tags at block level ──
+        if (tag === "img" || tag === "image") {
+            const src = node.getAttribute?.("src") || node.getAttribute?.("xlink:href") || ""
+            const alt = node.getAttribute?.("alt") || "[Image]"
+            if (src) {
+                paragraphs.push({ type: "image", text: alt, imageSrc: src, imageAlt: alt })
+            }
+            return
+        }
+
+        // ── SVG (may contain images) ──
+        if (tag === "svg") {
+            const imgInSvg = node.querySelector?.("image")
+            if (imgInSvg) {
+                const href = imgInSvg.getAttribute?.("xlink:href") || imgInSvg.getAttribute?.("href") || ""
+                if (href) {
+                    paragraphs.push({ type: "image", text: "[SVG Image]", imageSrc: href, imageAlt: "" })
+                }
             }
             return
         }
@@ -353,8 +396,16 @@ function cleanTextWithInlineCode(node: any): string {
             return
         }
 
-        // Skip images, scripts, styles
-        if (tag === "img" || tag === "script" || tag === "style") return
+        // Skip scripts, styles
+        if (tag === "script" || tag === "style") return
+
+        // Handle inline images — push a text representation
+        if (tag === "img" || tag === "image") {
+            const alt = node.getAttribute?.("alt") || ""
+            if (alt) parts.push(`[${alt}]`)
+            else parts.push("[Image]")
+            return
+        }
 
         // ── Footnote references (superscript links) ──
         if (tag === "sup" || (tag === "a" &&

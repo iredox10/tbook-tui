@@ -1667,5 +1667,6 @@ export async function parsePdf(filePath: string): Promise<ParsedBook> {
         metadata,
         chapters,
         totalWords,
+        imageMap: new Map(),
     }
 }
