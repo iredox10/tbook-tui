@@ -598,17 +598,11 @@ export class ReaderView {
             for (let i = 0; i < parts.length; i++) {
                 const textPart = parts[i]
                 if (!textPart) continue
-                const node = this.paraNodes[hl.paragraph_index + i]
-                if (node) {
-                    const bgColorCode = this.getHighlightBgColor(hl.color, th)
-                    const bgAnsi = this.hexToAnsiBg(bgColorCode)
-                    const fgAnsi = this.hexToAnsiFg(th.bg.void)
-                    const escapedText = textPart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-                    const regex = new RegExp(escapedText, "g")
-                    node.content = String(node.content as any).replace(regex, (match: string) => {
-                        return `${bgAnsi}${fgAnsi}${match}\x1b[0m`
-                    })
-                }
+                const paraIdx = hl.paragraph_index + i
+                const node = this.paraNodes[paraIdx]
+                const para = this.parsedBook.chapters[this.currentChapter]?.paragraphs[paraIdx]
+                if (!node || !para) continue
+                this.applyPersistentHighlightToNode(node, para, textPart, hl.color, th)
             }
         }
 
@@ -1454,6 +1448,11 @@ export class ReaderView {
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter || chapter.paragraphs.length === 0) return
 
+        if (this.autoScrollActive) {
+            this.stopAutoScroll()
+            showToast(this.renderer, "⏸ Auto-scroll paused for select mode", "info")
+        }
+
         this.selectMode = true
         this.visualMode = false
         this.selectionAnchor = null
@@ -1482,6 +1481,17 @@ export class ReaderView {
         this.statusBar.setMode("select")
         showToast(this.renderer, "✎ SELECT — h/l char · w/b word · j/k para · v visual · c copy · Enter open code · Esc exit", "info")
         this.renderSelection()
+    }
+
+    private rerenderCurrentChapterPreserveViewport(chapterIndex: number, scrollTop: number) {
+        this.currentChapter = chapterIndex
+        this.renderChapter()
+        setTimeout(() => {
+            if (this.currentChapter === chapterIndex) {
+                this.readingPane.scrollTo(scrollTop)
+                this.updateStatusProgress()
+            }
+        }, 50)
     }
 
     private exitSelectMode() {
@@ -1662,8 +1672,65 @@ export class ReaderView {
         }
     }
 
-    private applyHighlightToNode(node: any, para: any, th: any, prefix: string, highlighted: string, suffix: string) {
-        applyWordHighlight(node, para, th, prefix, highlighted, suffix)
+    private applyHighlightToNode(
+        node: any,
+        para: any,
+        th: any,
+        prefix: string,
+        highlighted: string,
+        suffix: string,
+        markColor?: string,
+    ) {
+        const highlightBg = markColor || th.accent.amber
+        switch (para.type) {
+            case "heading":
+                node.content = t`\n\n${fg(th.text.body)(prefix)}${bold(bg(highlightBg)(fg(th.bg.void)(highlighted)))}${fg(th.text.body)(suffix)}\n`
+                break
+            case "quote":
+                node.content = t`\n  ${fg(th.accent.cyan)("│")} ${fg(th.text.muted)(prefix)}${bold(bg(highlightBg)(fg(th.bg.void)(highlighted)))}${fg(th.text.muted)(suffix)}\n`
+                break
+            case "list-item": {
+                const indent = "  ".repeat((para.indent || 0) + 1)
+                const bullet = para.ordered ? `${para.index}.` : "•"
+                node.content = t`${indent}${fg(th.accent.cyan)(bullet)} ${fg(th.text.body)(prefix)}${bold(bg(highlightBg)(fg(th.bg.void)(highlighted)))}${fg(th.text.body)(suffix)}`
+                break
+            }
+            default:
+                node.content = t`\n${fg(th.text.body)(prefix)}${bold(bg(highlightBg)(fg(th.bg.void)(highlighted)))}${fg(th.text.body)(suffix)}\n`
+                break
+        }
+    }
+
+    private applyPersistentHighlightToNode(
+        node: any,
+        para: any,
+        textPart: string,
+        color: string,
+        th: any,
+    ) {
+        const markColor = this.getHighlightBgColor(color, th)
+        const rawContent = (node as any).content
+
+        // Keep ANSI replacement only for plain-string nodes (e.g. code/table blocks).
+        if (typeof rawContent === "string") {
+            const bgAnsi = this.hexToAnsiBg(markColor)
+            const fgAnsi = this.hexToAnsiFg(th.bg.void)
+            const escapedText = textPart.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+            const regex = new RegExp(escapedText, "g")
+            node.content = rawContent.replace(regex, (match: string) => `${bgAnsi}${fgAnsi}${match}\x1b[0m`)
+            return
+        }
+
+        // Rich content nodes use OpenTUI templates; rebuild from source text.
+        const sourceText = para?.text || ""
+        if (!sourceText) return
+        const start = sourceText.indexOf(textPart)
+        if (start < 0) return
+
+        const prefix = sourceText.slice(0, start)
+        const highlighted = sourceText.slice(start, start + textPart.length)
+        const suffix = sourceText.slice(start + textPart.length)
+        this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix, markColor)
     }
 
     private clearAllSelectionHighlights() {
@@ -1695,17 +1762,11 @@ export class ReaderView {
             for (let i = 0; i < parts.length; i++) {
                 const textPart = parts[i]
                 if (!textPart) continue
-                const node = this.paraNodes[hl.paragraph_index + i]
-                if (node) {
-                    const bgColorCode = this.getHighlightBgColor(hl.color, th)
-                    const bgAnsi = this.hexToAnsiBg(bgColorCode)
-                    const fgAnsi = this.hexToAnsiFg(th.bg.void)
-                    const escapedText = textPart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-                    const regex = new RegExp(escapedText, "g")
-                    node.content = String(node.content as any).replace(regex, (match: string) => {
-                        return `${bgAnsi}${fgAnsi}${match}\x1b[0m`
-                    })
-                }
+                const paraIdx = hl.paragraph_index + i
+                const node = this.paraNodes[paraIdx]
+                const para = this.parsedBook.chapters[this.currentChapter]?.paragraphs[paraIdx]
+                if (!node || !para) continue
+                this.applyPersistentHighlightToNode(node, para, textPart, hl.color, th)
             }
         }
     }
@@ -1847,14 +1908,7 @@ export class ReaderView {
                 const textPart = parts[offset]
                 if (!textPart) continue
                 const th2 = getTheme()
-                const bgColorCode = this.getHighlightBgColor(hl.color, th2)
-                const bgAnsi = this.hexToAnsiBg(bgColorCode)
-                const fgAnsi = this.hexToAnsiFg(th2.bg.void)
-                const escapedText = textPart.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-                const regex = new RegExp(escapedText, "g")
-                node.content = String(node.content as any).replace(regex, (match: string) => {
-                    return `${bgAnsi}${fgAnsi}${match}\x1b[0m`
-                })
+                this.applyPersistentHighlightToNode(node, para, textPart, hl.color, th2)
             }
         }
     }
@@ -2056,8 +2110,10 @@ export class ReaderView {
     }
 
     private highlightSelectedText() {
-        const chapter = this.parsedBook.chapters[this.currentChapter]
+        const chapterIndex = this.currentChapter
+        const chapter = this.parsedBook.chapters[chapterIndex]
         if (!chapter) return
+        const scrollTop = this.readingPane.scrollTop
 
         const selectedText = this.getSelectedText()
         if (!selectedText) return
@@ -2066,7 +2122,7 @@ export class ReaderView {
 
         addHighlight(
             this.book.id,
-            this.currentChapter,
+            chapterIndex,
             sp,
             selectedText,
             this.highlightColor,
@@ -2076,7 +2132,7 @@ export class ReaderView {
         const icon = colorIcons[this.highlightColor] || "📌"
         showToast(this.renderer, `${icon} Highlighted (${this.highlightColor}): "${selectedText.slice(0, 30)}${selectedText.length > 30 ? "…" : ""}"`, "success")
         this.exitSelectMode()
-        this.renderChapter()
+        this.rerenderCurrentChapterPreserveViewport(chapterIndex, scrollTop)
     }
 
     /** Add a highlighted note — highlight with an inline note annotation */
@@ -2091,12 +2147,14 @@ export class ReaderView {
         this.annotationModal = new AnnotationModal(
             this.renderer,
             (note: string) => {
+                const chapterIndex = this.currentChapter
+                const scrollTop = this.readingPane.scrollTop
                 this.modalOpen = false
                 const { sp } = this.getSelectionRange()
 
                 addHighlight(
                     this.book.id,
-                    this.currentChapter,
+                    chapterIndex,
                     sp,
                     selectedText,
                     this.highlightColor,
@@ -2105,7 +2163,7 @@ export class ReaderView {
 
                 showToast(this.renderer, `📝 Annotation saved`, "success")
                 this.exitSelectMode()
-                this.renderChapter()
+                this.rerenderCurrentChapterPreserveViewport(chapterIndex, scrollTop)
             },
             () => {
                 this.modalOpen = false
