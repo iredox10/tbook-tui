@@ -602,7 +602,7 @@ export class ReaderView {
                 const node = this.paraNodes[paraIdx]
                 const para = this.parsedBook.chapters[this.currentChapter]?.paragraphs[paraIdx]
                 if (!node || !para) continue
-                this.applyPersistentHighlightToNode(node, para, textPart, hl.color, th)
+                this.applyPersistentHighlightToNode(node, para, textPart, hl.color, !!hl.note, th)
             }
         }
 
@@ -984,18 +984,22 @@ export class ReaderView {
                     case "1":
                         this.highlightColor = "yellow"
                         showToast(this.renderer, "🟡 Highlight color: Yellow", "info")
+                        this.renderSelection()
                         return true
                     case "2":
                         this.highlightColor = "green"
                         showToast(this.renderer, "🟢 Highlight color: Green", "info")
+                        this.renderSelection()
                         return true
                     case "3":
                         this.highlightColor = "blue"
                         showToast(this.renderer, "🔵 Highlight color: Blue", "info")
+                        this.renderSelection()
                         return true
                     case "4":
                         this.highlightColor = "pink"
                         showToast(this.renderer, "🩷 Highlight color: Pink", "info")
+                        this.renderSelection()
                         return true
                     case "n": // Add note to highlight
                         this.highlightWithNote()
@@ -1623,6 +1627,7 @@ export class ReaderView {
             // Visual mode: highlight full range between anchor and cursor
             this.clearAllSelectionHighlights()
             const { sp, sc, ep, ec } = this.getSelectionRange()
+            const liveColor = this.getHighlightBgColor(this.highlightColor, th)
 
             for (let pi = sp; pi <= ep; pi++) {
                 const text = this.getParaText(pi)
@@ -1640,7 +1645,7 @@ export class ReaderView {
                 const highlighted = text.slice(cStart, cEnd + 1)
                 const suffix = text.slice(cEnd + 1)
 
-                this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix)
+                this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix, liveColor)
             }
         } else {
             // Select mode: single char cursor
@@ -1656,8 +1661,9 @@ export class ReaderView {
             const prefix = text.slice(0, this.selectCharIdx)
             const highlighted = text[this.selectCharIdx] || " "
             const suffix = text.slice(this.selectCharIdx + 1)
+            const liveColor = this.getHighlightBgColor(this.highlightColor, th)
 
-            this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix)
+            this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix, liveColor)
         }
 
         // Only scroll if the cursor paragraph is outside the visible viewport
@@ -1706,12 +1712,27 @@ export class ReaderView {
         para: any,
         textPart: string,
         color: string,
+        hasNote: boolean,
         th: any,
     ) {
-        const markColor = this.getHighlightBgColor(color, th)
+        const markColor = this.getStoredHighlightBgColor(color, hasNote, th)
         const rawContent = (node as any).content
+        const sourceText = para?.text || ""
 
-        // Keep ANSI replacement only for plain-string nodes (e.g. code/table blocks).
+        // For structured text nodes, rebuild using OpenTUI templates so highlight colors render reliably.
+        if (para?.type !== "code" && para?.type !== "table" && para?.type !== "image") {
+            if (!sourceText) return
+            const start = sourceText.indexOf(textPart)
+            if (start < 0) return
+
+            const prefix = sourceText.slice(0, start)
+            const highlighted = sourceText.slice(start, start + textPart.length)
+            const suffix = sourceText.slice(start + textPart.length)
+            this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix, markColor)
+            return
+        }
+
+        // Keep ANSI replacement for rendered block strings (code/table/image placeholder).
         if (typeof rawContent === "string") {
             const bgAnsi = this.hexToAnsiBg(markColor)
             const fgAnsi = this.hexToAnsiFg(th.bg.void)
@@ -1720,17 +1741,6 @@ export class ReaderView {
             node.content = rawContent.replace(regex, (match: string) => `${bgAnsi}${fgAnsi}${match}\x1b[0m`)
             return
         }
-
-        // Rich content nodes use OpenTUI templates; rebuild from source text.
-        const sourceText = para?.text || ""
-        if (!sourceText) return
-        const start = sourceText.indexOf(textPart)
-        if (start < 0) return
-
-        const prefix = sourceText.slice(0, start)
-        const highlighted = sourceText.slice(start, start + textPart.length)
-        const suffix = sourceText.slice(start + textPart.length)
-        this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix, markColor)
     }
 
     private clearAllSelectionHighlights() {
@@ -1766,7 +1776,7 @@ export class ReaderView {
                 const node = this.paraNodes[paraIdx]
                 const para = this.parsedBook.chapters[this.currentChapter]?.paragraphs[paraIdx]
                 if (!node || !para) continue
-                this.applyPersistentHighlightToNode(node, para, textPart, hl.color, th)
+                this.applyPersistentHighlightToNode(node, para, textPart, hl.color, !!hl.note, th)
             }
         }
     }
@@ -1779,6 +1789,12 @@ export class ReaderView {
             case "pink": return th.accent.pink
             default: return th.accent.amber
         }
+    }
+
+    private getStoredHighlightBgColor(color: string, hasNote: boolean, th: any): string {
+        // Annotated highlights get a dedicated color so they are visually distinct from plain highlights.
+        if (hasNote) return th.accent.orange
+        return this.getHighlightBgColor(color, th)
     }
 
     private hexToAnsiBg(hex: string) {
@@ -1908,7 +1924,7 @@ export class ReaderView {
                 const textPart = parts[offset]
                 if (!textPart) continue
                 const th2 = getTheme()
-                this.applyPersistentHighlightToNode(node, para, textPart, hl.color, th2)
+                this.applyPersistentHighlightToNode(node, para, textPart, hl.color, !!hl.note, th2)
             }
         }
     }
@@ -2168,6 +2184,7 @@ export class ReaderView {
             () => {
                 this.modalOpen = false
                 showToast(this.renderer, "Annotation cancelled", "info")
+                this.exitSelectMode()
             }
         )
         this.annotationModal.show()

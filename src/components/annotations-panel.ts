@@ -8,7 +8,8 @@ import {
     t, bold, fg, italic,
 } from "@opentui/core"
 import { theme, truncate } from "../utils/theme"
-import { getHighlights, type HighlightRecord } from "../services/database"
+import { getHighlights, removeHighlight, type HighlightRecord } from "../services/database"
+import { showToast } from "./toast"
 
 export class AnnotationsPanel {
     private renderer: CliRenderer
@@ -90,7 +91,7 @@ export class AnnotationsPanel {
         // Footer
         this.container.add(new TextRenderable(this.renderer, {
             id: "annot-footer",
-            content: t`${fg(theme.text.subtle)(" j/k Navigate · Enter Jump to · Esc Close")}`,
+            content: t`${fg(theme.text.subtle)(" j/k Navigate · Enter Jump to · d Delete · Esc Close")}`,
         }))
 
         this.renderer.root.add(this.container)
@@ -125,6 +126,20 @@ export class AnnotationsPanel {
                         this.hide()
                         this.onJump(ann.chapter, ann.paragraph_index)
                     }
+                    return true
+                }
+                case "d": {
+                    const ann = this.annotations[this.selectedIndex]
+                    if (!ann) return true
+                    removeHighlight(ann.id)
+                    this.annotations.splice(this.selectedIndex, 1)
+                    if (this.annotations.length === 0) {
+                        this.selectedIndex = 0
+                    } else {
+                        this.selectedIndex = Math.min(this.selectedIndex, this.annotations.length - 1)
+                    }
+                    this.renderList()
+                    showToast(this.renderer, "🗑 Annotation deleted", "info")
                     return true
                 }
             }
