@@ -22,6 +22,7 @@ import { showToast } from "../components/toast"
 import { HelpOverlay } from "../components/help-overlay"
 import { ChapterTocModal } from "../components/chapter-toc"
 import { SearchModal } from "../components/search-modal"
+import { AnnotationModal } from "../components/annotation-modal"
 import { BookmarksPanel } from "../components/bookmarks-panel"
 import { DictionaryModal } from "../components/dictionary-modal"
 import { VocabularyPanel } from "../components/vocabulary-panel"
@@ -81,6 +82,7 @@ export class ReaderView {
     private helpOverlay: HelpOverlay | null = null
     private tocModal: ChapterTocModal | null = null
     private searchModal: SearchModal | null = null
+    private annotationModal: AnnotationModal | null = null
     private bookmarksPanel: BookmarksPanel | null = null
     private dictionaryModal: DictionaryModal | null = null
     private vocabularyPanel: VocabularyPanel | null = null
@@ -303,7 +305,7 @@ export class ReaderView {
         this.container.add(this.sidebar)
         this.container.add(this.readingPane)
         this.container.add(this.minimapContainer)
-        
+
         this.renderer.root.add(this.container)
         this.renderer.root.add(this.statusBar.root)
 
@@ -1063,7 +1065,7 @@ export class ReaderView {
                 case "_":
                     this.adjustZoom(-1)
                     return true
-                
+
                 // Line spacing
                 case "]":
                     this.adjustLineSpacing(1)
@@ -1084,7 +1086,7 @@ export class ReaderView {
                 case "T":
                     this.toggleTheme()
                     return true
-                    
+
                 // Minimap
                 case "m":
                 case "M":
@@ -1144,7 +1146,7 @@ export class ReaderView {
                 case "V":
                     this.showVocabulary()
                     return true
-                    
+
                 case "p":
                 case "P":
                     this.toggleTTS()
@@ -1351,9 +1353,9 @@ export class ReaderView {
     private showAiSummarize() {
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter) return
-        
+
         let text = ""
-        for(let i=0; i<Math.min(chapter.paragraphs.length, 100); i++) {
+        for (let i = 0; i < Math.min(chapter.paragraphs.length, 100); i++) {
             text += chapter.paragraphs[i]?.text + "\n\n"
         }
 
@@ -1371,7 +1373,7 @@ export class ReaderView {
             showToast(this.renderer, "No text selected to explain", "error")
             return
         }
-        
+
         this.modalOpen = true
         this.aiModal = new AiModal(this.renderer, () => {
             this.modalOpen = false
@@ -1383,30 +1385,69 @@ export class ReaderView {
 
     // ── Inline Select Mode / Visual Mode ─────────────────────────
 
+    private getEstimatedCharsPerLine(): number {
+        const viewportWidth = this.readingPane?.viewport?.width || 80
+        const horizontalPad = ZOOM_LEVELS[this.zoomIndex] ?? ZOOM_LEVELS[DEFAULT_ZOOM_INDEX] ?? 6
+        // Account for bullets/quotes/indent and some rendering overhead.
+        return Math.max(24, viewportWidth - horizontalPad * 2 - 8)
+    }
+
+    private getEstimatedParagraphLineSpan(paraIdx: number): number {
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        const para = chapter?.paragraphs[paraIdx]
+        if (!para) return 1
+
+        const extraSpacing = para.type !== "separator" ? this.lineSpacing : 0
+
+        if (para.type === "code") {
+            const fullLines = para.text.split("\n").length
+            const visibleLines = this.collapsedCodeBlocks.has(paraIdx)
+                ? (fullLines > 2 ? 3 : fullLines)
+                : fullLines
+            return visibleLines + 2 + extraSpacing
+        }
+
+        if (para.type === "table") {
+            return (para.tableRows?.length || 0) + 4 + extraSpacing
+        }
+
+        if (para.type === "image") {
+            return 5 + extraSpacing
+        }
+
+        const charsPerLine = this.getEstimatedCharsPerLine()
+        const text = para.text || ""
+        const wrappedLines = text ? Math.max(1, Math.ceil(text.length / charsPerLine)) : 1
+        return wrappedLines + 1 + extraSpacing
+    }
+
     // Helper to accurately estimate line offset for a paragraph
     private getEstimatedLineOffset(targetParaIdx: number): number {
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter) return 0
-        
+
         let offset = 6 // fixed nodes at top (title, separator, spacing)
         for (let i = 0; i < targetParaIdx; i++) {
-            const para = chapter.paragraphs[i]
-            if (!para || !para.text) {
-                offset += 1
-                continue
-            }
-            if (para.type === "code") {
-                offset += para.text.split("\n").length + 2
-                continue
-            }
-            if (para.type === "table") {
-                offset += (para.tableRows?.length || 0) + 4
-                continue
-            }
-            // Assume roughly 70 chars per line in the reader viewport
-            offset += Math.max(1, Math.ceil(para.text.length / 70)) + 1 
+            offset += this.getEstimatedParagraphLineSpan(i)
         }
         return offset
+    }
+
+    private findNearestSelectableParagraph(startIdx: number): number {
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter || chapter.paragraphs.length === 0) return 0
+
+        const clamped = Math.max(0, Math.min(startIdx, chapter.paragraphs.length - 1))
+        if (this.getParaText(clamped).length > 0) return clamped
+
+        for (let radius = 1; radius < chapter.paragraphs.length; radius++) {
+            const left = clamped - radius
+            if (left >= 0 && this.getParaText(left).length > 0) return left
+            const right = clamped + radius
+            if (right < chapter.paragraphs.length && this.getParaText(right).length > 0) return right
+        }
+
+        return clamped
     }
 
     private enterSelectMode() {
@@ -1416,48 +1457,27 @@ export class ReaderView {
         this.selectMode = true
         this.visualMode = false
         this.selectionAnchor = null
-        
-        // Find the paragraph that is currently at the top of the viewport
-        const currentScroll = this.readingPane.scrollTop
-        this.selectParaIdx = 0
-        
-        let cumulativeLines = 6
+
+        // Anchor selection to current viewport using text-layout estimates.
+        const viewportTop = this.readingPane.scrollTop
+        const viewportHeight = this.readingPane.viewport?.height || 30
+        const targetLine = viewportTop + Math.floor(viewportHeight / 3)
+        let estimatedIdx = 0
+        let cumulativeTop = 6
+
         for (let i = 0; i < chapter.paragraphs.length; i++) {
-            const para = chapter.paragraphs[i]
-            if (!para) continue
-            
-            let lines = 1
-            if (para.type === "code") lines = para.text.split("\n").length + 2
-            else if (para.type === "table") lines = (para.tableRows?.length || 0) + 4
-            else if (para.text) lines = Math.max(1, Math.ceil(para.text.length / 70)) + 1
-            
-            if (cumulativeLines + lines > currentScroll + 2) {
-                this.selectParaIdx = i
+            const span = this.getEstimatedParagraphLineSpan(i)
+            const bottom = cumulativeTop + span - 1
+            if (targetLine <= bottom) {
+                estimatedIdx = i
                 break
             }
-            cumulativeLines += lines
+            estimatedIdx = i
+            cumulativeTop += span
         }
 
+        this.selectParaIdx = this.findNearestSelectableParagraph(estimatedIdx)
         this.selectCharIdx = 0
-
-        // Find first paragraph with actual text starting from our estimate
-        while (this.selectParaIdx < chapter.paragraphs.length) {
-            const text = this.getParaText(this.selectParaIdx)
-            if (text.length > 0) break
-            this.selectParaIdx++
-        }
-        
-        // If we ran off the end, search backwards
-        if (this.selectParaIdx >= chapter.paragraphs.length) {
-            this.selectParaIdx = chapter.paragraphs.length - 1
-            while (this.selectParaIdx >= 0) {
-                const text = this.getParaText(this.selectParaIdx)
-                if (text.length > 0) break
-                this.selectParaIdx--
-            }
-        }
-        
-        this.selectParaIdx = Math.max(0, this.selectParaIdx)
 
         this.statusBar.setMode("select")
         showToast(this.renderer, "✎ SELECT — h/l char · w/b word · j/k para · v visual · c copy · Enter open code · Esc exit", "info")
@@ -1635,7 +1655,7 @@ export class ReaderView {
         const viewportTop = this.readingPane.scrollTop
         const viewportHeight = this.readingPane.viewport?.height || 30
         const viewportBottom = viewportTop + viewportHeight
-        
+
         if (estimatedLine < viewportTop + 2 || estimatedLine > viewportBottom - 3) {
             // Cursor is outside visible area — scroll to center it
             this.readingPane.scrollTo(Math.max(0, estimatedLine - Math.floor(viewportHeight / 2)))
@@ -1707,7 +1727,7 @@ export class ReaderView {
         const b = parseInt(hex.slice(5, 7), 16)
         return `\x1b[48;2;${r};${g};${b}m`
     }
-    
+
     private hexToAnsiFg(hex: string) {
         if (!hex || hex.length < 7) return ""
         const r = parseInt(hex.slice(1, 3), 16)
@@ -1856,7 +1876,7 @@ export class ReaderView {
 
     private updateMinimap() {
         if (!this.minimapVisible) return
-        
+
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter) return
 
@@ -1866,32 +1886,32 @@ export class ReaderView {
 
         // Estimate available height
         const H = Math.max(10, this.minimapContainer.height || 40)
-        
+
         const lines: string[] = []
-        
+
         const viewportTop = this.readingPane.scrollTop
         const viewportBottom = viewportTop + this.readingPane.viewport.height
 
         for (let l = 0; l < H; l++) {
             const startP = Math.floor((l / H) * P)
             const endP = Math.max(startP + 1, Math.floor(((l + 1) / H) * P))
-            
+
             let char = "│"
             let color = th.border.normal
             let isVisible = false
-            
+
             for (let p = startP; p < endP; p++) {
                 const para = chapter.paragraphs[p]
                 const node = this.paraNodes[p]
                 if (!para || !node) continue
-                
+
                 const nodeTop = node.y
                 const nodeBottom = nodeTop + (node.height || 1)
-                
+
                 if (nodeBottom >= viewportTop && nodeTop <= viewportBottom) {
                     isVisible = true
                 }
-                
+
                 if (para.type === "heading") {
                     char = "█"
                     color = th.accent.cyan
@@ -1905,14 +1925,14 @@ export class ReaderView {
                     char = "┃"
                 }
             }
-            
+
             if (isVisible) {
                 lines.push(` ${bg(th.bg.hover)(fg(th.text.body)(char))} `)
             } else {
                 lines.push(` ${bg(th.bg.void)(fg(color)(char))} `)
             }
         }
-        
+
         this.minimapContent.content = lines.join("\n")
     }
 
@@ -1942,7 +1962,7 @@ export class ReaderView {
 
         showToast(this.renderer, "🔊 Playing TTS...", "info")
         TTSService.play(
-            cleanText, 
+            cleanText,
             () => {
                 showToast(this.renderer, "🔇 TTS finished", "info")
             },
@@ -1956,7 +1976,7 @@ export class ReaderView {
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter) return
         const para = chapter.paragraphs[this.selectParaIdx]
-        
+
         if (!this.visualMode && para?.type === "code") {
             this.modalOpen = true
             this.codeModal = new CodeModal(this.renderer, () => {
@@ -1980,7 +2000,7 @@ export class ReaderView {
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter) return
         const para = chapter.paragraphs[this.selectParaIdx]
-        
+
         if (para?.type === "code") {
             if (this.collapsedCodeBlocks.has(this.selectParaIdx)) {
                 this.collapsedCodeBlocks.delete(this.selectParaIdx)
@@ -1998,7 +2018,7 @@ export class ReaderView {
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter) return
         const para = chapter.paragraphs[this.selectParaIdx]
-        
+
         let textToCopy = ""
         if (this.visualMode) {
             textToCopy = this.getSelectedText().trim()
@@ -2067,22 +2087,32 @@ export class ReaderView {
             return
         }
 
-        const { sp } = this.getSelectionRange()
+        this.modalOpen = true
+        this.annotationModal = new AnnotationModal(
+            this.renderer,
+            (note: string) => {
+                this.modalOpen = false
+                const { sp } = this.getSelectionRange()
 
-        // Use a simple prompt approach — save highlight with a placeholder note
-        // and show toast instructing user to edit in annotations panel
-        addHighlight(
-            this.book.id,
-            this.currentChapter,
-            sp,
-            selectedText,
-            this.highlightColor,
-            "📝 Note added",
+                addHighlight(
+                    this.book.id,
+                    this.currentChapter,
+                    sp,
+                    selectedText,
+                    this.highlightColor,
+                    note,
+                )
+
+                showToast(this.renderer, `📝 Annotation saved`, "success")
+                this.exitSelectMode()
+                this.renderChapter()
+            },
+            () => {
+                this.modalOpen = false
+                showToast(this.renderer, "Annotation cancelled", "info")
+            }
         )
-
-        showToast(this.renderer, `📝 Highlighted with note — press N to view/edit annotations`, "success")
-        this.exitSelectMode()
-        this.renderChapter()
+        this.annotationModal.show()
     }
 
     // ── Search match navigation (n/N) ──────────────────────────────
@@ -2220,6 +2250,7 @@ export class ReaderView {
         this.helpOverlay?.destroy()
         this.tocModal?.destroy()
         this.searchModal?.destroy()
+        this.annotationModal?.hide()
         this.bookmarksPanel?.destroy()
         this.dictionaryModal?.destroy()
         this.vocabularyPanel?.destroy()
