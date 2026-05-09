@@ -1273,9 +1273,12 @@ export class ReaderView {
     // ── Phase 4 Features ────────────────────────────────────────
 
     private showDictionary(word?: string) {
+        // Avoid keeping terminal selection highlight while dictionary is open.
+        this.renderer.clearSelection()
         this.modalOpen = true
         this.dictionaryModal = new DictionaryModal(this.renderer, () => {
             this.modalOpen = false
+            this.renderer.clearSelection()
             this.readingPane.focus()
         })
         this.dictionaryModal.show(word)
