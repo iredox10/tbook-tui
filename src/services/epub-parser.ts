@@ -47,6 +47,7 @@ export async function parseEpub(filePath: string): Promise<ParsedBook> {
     // Extract chapters from the table of contents / spine
     const chapters: Chapter[] = []
     const flow = epub.flow || []
+    const tocLookup = buildTocLookup(epub)
 
     for (let i = 0; i < flow.length; i++) {
         const item = flow[i]
@@ -65,8 +66,10 @@ export async function parseEpub(filePath: string): Promise<ParsedBook> {
             // Skip truly empty chapters (no text AND no images)
             if (wordCount < 5 && paragraphs.length < 2 && imageCount === 0) continue
 
-            // Try to get a title from the TOC
-            const tocTitle = findTocTitle(epub, item.id) || `Chapter ${chapters.length + 1}`
+            // Prefer TOC title, then in-chapter heading, then a generic fallback.
+            const tocTitle = findTocTitle(epub, item.id, tocLookup)
+                || deriveChapterTitleFromParagraphs(paragraphs)
+                || `Chapter ${chapters.length + 1}`
 
             chapters.push({
                 id: item.id,
@@ -129,20 +132,96 @@ function getChapterContent(epub: any, chapterId: string): Promise<string> {
     })
 }
 
+function normalizeHref(href: string | undefined): string {
+    if (!href) return ""
+    return decodeURIComponent(href)
+        .replace(/\\/g, "/")
+        .replace(/^\.\/+/, "")
+        .replace(/^\/+/, "")
+        .split("#")[0]!
+        .trim()
+        .toLowerCase()
+}
+
+function getHrefBaseName(normalizedHref: string): string {
+    const idx = normalizedHref.lastIndexOf("/")
+    return idx >= 0 ? normalizedHref.slice(idx + 1) : normalizedHref
+}
+
+function flattenToc(toc: any[]): any[] {
+    const out: any[] = []
+    const visit = (entry: any) => {
+        if (!entry) return
+        out.push(entry)
+        const children = entry.subitems || entry.children || entry.items || []
+        if (Array.isArray(children)) {
+            for (const child of children) visit(child)
+        }
+    }
+    for (const entry of toc || []) visit(entry)
+    return out
+}
+
+function buildTocLookup(epub: any): { byId: Map<string, string>; byHref: Map<string, string>; byBaseName: Map<string, string> } {
+    const byId = new Map<string, string>()
+    const byHref = new Map<string, string>()
+    const byBaseName = new Map<string, string>()
+    const flatToc = flattenToc(epub.toc || [])
+
+    for (const entry of flatToc) {
+        const title = (entry?.title || "").trim()
+        if (!title) continue
+
+        const id = (entry?.id || "").trim()
+        if (id) byId.set(id, title)
+
+        const href = normalizeHref(entry?.href)
+        if (href) {
+            byHref.set(href, title)
+            byBaseName.set(getHrefBaseName(href), title)
+        }
+    }
+
+    return { byId, byHref, byBaseName }
+}
+
+function deriveChapterTitleFromParagraphs(paragraphs: StyledParagraph[]): string | null {
+    for (const p of paragraphs) {
+        if (p.type === "heading" && p.text?.trim()) {
+            return p.text.trim()
+        }
+    }
+    for (const p of paragraphs) {
+        const text = (p.text || "").trim()
+        if (!text) continue
+        if (p.type === "paragraph" || p.type === "quote") {
+            return text.length > 80 ? `${text.slice(0, 77)}...` : text
+        }
+    }
+    return null
+}
+
 /**
  * Find a chapter title from the TOC by matching IDs
  */
-function findTocTitle(epub: any, itemId: string): string | null {
-    const toc = epub.toc || []
+function findTocTitle(
+    epub: any,
+    itemId: string,
+    lookup: { byId: Map<string, string>; byHref: Map<string, string>; byBaseName: Map<string, string> },
+): string | null {
+    if (lookup.byId.has(itemId)) return lookup.byId.get(itemId) || null
 
-    for (const entry of toc) {
-        // TOC href might include fragment (#xxx) - compare base
-        const tocHref = (entry.href || "").split("#")[0]
-        const manifest = epub.manifest?.[itemId]
-        const itemHref = manifest?.href || ""
+    const itemHref = normalizeHref(epub.manifest?.[itemId]?.href)
+    if (!itemHref) return null
 
-        if (tocHref === itemHref || entry.id === itemId) {
-            return entry.title || null
+    if (lookup.byHref.has(itemHref)) return lookup.byHref.get(itemHref) || null
+
+    const baseName = getHrefBaseName(itemHref)
+    if (lookup.byBaseName.has(baseName)) return lookup.byBaseName.get(baseName) || null
+
+    for (const [tocHref, title] of lookup.byHref) {
+        if (tocHref.endsWith(`/${baseName}`) || itemHref.endsWith(`/${getHrefBaseName(tocHref)}`)) {
+            return title
         }
     }
 
