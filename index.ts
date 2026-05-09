@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 // ─────────────────────────────────────────────────────────────
 // TBook — Terminal Book Reader
 // Entry point

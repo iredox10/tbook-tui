@@ -1,5 +1,5 @@
 {
-  "name": "tbook-tui",
+  "name": "t-ebook",
   "version": "1.0.0",
   "description": "A premium terminal book reader built with OpenTUI",
   "type": "module",

@@ -40,6 +40,22 @@ export class SplashView {
             alignItems: "center",
             justifyContent: "center",
             backgroundColor: theme.bg.void,
+            gap: 2,
+        })
+
+        // A striking central card for the splash content
+        const cardBox = new BoxRenderable(this.renderer, {
+            id: "splash-card",
+            width: 65,
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: theme.bg.surface,
+            border: true,
+            borderStyle: "rounded",
+            borderColor: theme.accent.blue,
+            paddingY: 3,
+            paddingX: 4,
             gap: 1,
         })
 
@@ -47,15 +63,14 @@ export class SplashView {
         const logo = new ASCIIFontRenderable(this.renderer, {
             id: "splash-logo",
             text: "TBOOK",
-            font: "block",
-            color: [theme.accent.cyan, theme.accent.blue, theme.accent.purple],
+            font: "slick",
+            color: [theme.accent.cyan, theme.accent.blue, theme.accent.purple, theme.accent.pink],
         })
 
         // Tagline
         const tagline = new TextRenderable(this.renderer, {
             id: "splash-tagline",
-            content: "Terminal Book Reader",
-            fg: theme.text.muted,
+            content: t`${bold(fg(theme.text.bright)("Terminal Book Reader"))} ${fg(theme.text.muted)("— Reimagined")}`,
         })
 
         // Spacer
@@ -73,28 +88,28 @@ export class SplashView {
                 ? Math.round((lastBook.current_chapter / lastBook.total_chapters) * 100)
                 : 0
             options.push({
-                name: `→ Continue: ${lastBook.title}`,
+                name: `▶ Continue: ${lastBook.title}`,
                 description: `Ch.${lastBook.current_chapter + 1}, ${progress}%`,
                 value: "continue",
             })
         }
 
         options.push(
-            { name: "→ Open Library", description: `${books.length} book${books.length !== 1 ? "s" : ""}`, value: "library" },
-            { name: "→ Import Books", description: "Scan filesystem for EPUB files", value: "import" },
+            { name: "✦ Open Library", description: `${books.length} book${books.length !== 1 ? "s" : ""} available`, value: "library" },
+            { name: "⟳ Import Books", description: "Scan filesystem for EPUB & PDF files", value: "import" },
         )
 
         this.menu = new SelectRenderable(this.renderer, {
             id: "splash-menu",
-            width: 50,
+            width: 55,
             height: options.length * 2 + 2,
             options,
             backgroundColor: "transparent",
             selectedBackgroundColor: theme.bg.hover,
-            selectedTextColor: theme.accent.blue,
+            selectedTextColor: theme.accent.cyan,
             textColor: theme.text.body,
             descriptionColor: theme.text.subtle,
-            selectedDescriptionColor: theme.text.muted,
+            selectedDescriptionColor: theme.accent.blue,
             showDescription: true,
         })
 
@@ -114,16 +129,18 @@ export class SplashView {
 
         this.menu.focus()
 
+        cardBox.add(logo)
+        cardBox.add(tagline)
+        cardBox.add(spacer)
+        cardBox.add(this.menu)
+
         // Hint at bottom
         const hint = new TextRenderable(this.renderer, {
             id: "splash-hint",
-            content: t`${fg(theme.text.subtle)("Press q to quit · ? for help")}`,
+            content: t`${fg(theme.text.subtle)("Press ")}${fg(theme.accent.pink)("q")}${fg(theme.text.subtle)(" to quit · ")}${fg(theme.accent.pink)("?")}${fg(theme.text.subtle)(" for help")}`,
         })
 
-        this.container.add(logo)
-        this.container.add(tagline)
-        this.container.add(spacer)
-        this.container.add(this.menu)
+        this.container.add(cardBox)
         this.container.add(hint)
         this.renderer.root.add(this.container)
 
