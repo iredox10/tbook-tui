@@ -813,6 +813,8 @@ export class ReaderView {
     // ── Theme toggle ────────────────────────────────────────────
 
     private toggleTheme() {
+        const chapterIndex = this.currentChapter
+        const scrollTop = this.readingPane.scrollTop
         const current = getActiveTheme()
         const next = current === "dark" ? "light" : "dark"
         setActiveTheme(next)
@@ -828,8 +830,15 @@ export class ReaderView {
             this.readingPane.content.backgroundColor = th.bg.void
         } catch { }
 
-        // Re-render chapter content with new colors
-        this.renderChapter()
+        // Re-render chapter content with new colors while preserving viewport position
+        this.rerenderCurrentChapterPreserveViewport(chapterIndex, scrollTop)
+        if (this.selectMode) {
+            setTimeout(() => {
+                if (this.currentChapter === chapterIndex && this.selectMode) {
+                    this.renderSelection()
+                }
+            }, 60)
+        }
 
         // Phase 4: Persist theme to config
         updateConfig("theme", next)
