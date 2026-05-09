@@ -656,111 +656,26 @@ export class ImportView {
         }
         this.cardRenderables = []
 
-        const list = this.filteredFiles
-
-        for (let i = 0; i < list.length; i++) {
-            const file = list[i]!
-            const isSelected = i === this.selectedIndex
-
-        // Group by format
-        const epubs = this.files.filter(f => f.format === "epub")
-        const pdfs = this.files.filter(f => f.format === "pdf")
-
-        const renderGroup = (group: FoundFile[], label: string, color: string) => {
-            if (group.length === 0) return
-
-            // Section header
-            const header = new BoxRenderable(this.renderer, {
-                id: `import-header-${label}`,
-                width: "100%",
-                height: 1,
-                flexDirection: "row",
-                paddingLeft: 1,
-                paddingTop: 1,
-                paddingBottom: 0,
-                gap: 1,
-            })
-            header.add(new TextRenderable(this.renderer, {
-                id: `import-header-text-${label}`,
-                content: t`${fg(color)(label.toUpperCase())} ${fg(theme.text.muted)(`(${group.length})`)}`,
-            }))
-            this.fileList.add(header)
-            this.cardRenderables.push(header)
-
-            for (let gi = 0; gi < group.length; gi++) {
-                const file = group[gi]!
-                const i = this.files.indexOf(file)
-                const isSelected = i === this.selectedIndex
-                const isBatch = this.selectedForBatch.has(file.path)
-
-                const row = new BoxRenderable(this.renderer, {
-                    id: `file-row-${i}`,
-                    width: "100%",
-                    height: 2,
-                    flexDirection: "row",
-                    alignItems: "center",
-                    paddingLeft: 2,
-                    gap: 2,
-                    backgroundColor: isSelected ? theme.bg.hover : "transparent",
-                })
-
-                const indicator = new TextRenderable(this.renderer, {
-                    id: `file-ind-${i}`,
-                    content: isSelected ? t`${fg(theme.accent.green)("▸")}` : (isBatch ? t`${fg(theme.accent.cyan)("☑")}` : " "),
-                })
-
-                const formatBadge = new TextRenderable(this.renderer, {
-                    id: `file-fmt-${i}`,
-                    content: t`${fg(file.format === "pdf" ? theme.accent.orange : theme.accent.purple)(file.format.toUpperCase())}`,
-                })
-
-                const name = new TextRenderable(this.renderer, {
-                    id: `file-name-${i}`,
-                    content: t`${fg(file.alreadyImported
-                        ? theme.text.subtle
-                        : isSelected ? theme.accent.green : theme.text.body
-                    )(truncate(file.name, 36))}`,
-                })
-
-                const meta = new TextRenderable(this.renderer, {
-                    id: `file-meta-${i}`,
-                    content: t`${fg(theme.text.subtle)(file.size)}${file.alreadyImported
-                        ? fg(theme.text.subtle)(" ✓")
-                        : isBatch ? fg(theme.accent.cyan)(" batch")
-                        : ""}`,
-                })
-
-                row.add(indicator)
-                row.add(formatBadge)
-                row.add(name)
-                row.add(meta)
-                this.fileList.add(row)
-                this.cardRenderables.push(row)
+        if (this.filteredFiles.length === 0) {
+            if (!this.scanning) {
+                this.renderEmptyState(this.scanPath || this.pathInput.value || homedir())
             }
+            return
         }
 
-        renderGroup(epubs, "epub", theme.accent.purple)
-        renderGroup(pdfs, "pdf", theme.accent.orange)
+        for (let i = 0; i < this.filteredFiles.length; i++) {
+            const file = this.filteredFiles[i]!
+            const isSelected = i === this.selectedIndex
 
-        // Batch summary if selections exist
-        if (this.selectedForBatch.size > 0) {
-            const batchRow = new BoxRenderable(this.renderer, {
-                id: "import-batch-summary",
+            const row = new BoxRenderable(this.renderer, {
+                id: `file-row-${i}`,
                 width: "100%",
-                height: 3,
-                flexDirection: "column",
-                paddingLeft: 2,
-                backgroundColor: isSelected ? theme.bg.hover : "transparent",
-            })
-
-            // Top line: indicator + checkbox + format + name + size
-            const topLine = new BoxRenderable(this.renderer, {
-                id: `file-top-${i}`,
-                width: "100%",
-                height: 1,
+                height: 2,
                 flexDirection: "row",
                 alignItems: "center",
-                gap: 1,
+                paddingLeft: 2,
+                gap: 2,
+                backgroundColor: isSelected ? theme.bg.hover : "transparent",
             })
 
             const cursor = isSelected ? fg(theme.accent.green)("▸") : " "
@@ -769,46 +684,33 @@ export class ImportView {
                 : file.selected
                     ? fg(theme.accent.amber)("◉")
                     : fg(theme.text.subtle)("○")
+            const formatColor = file.format === "pdf"
+                ? theme.accent.orange
+                : file.format === "epub"
+                    ? theme.accent.purple
+                    : theme.accent.cyan
 
-            topLine.add(new TextRenderable(this.renderer, {
+            row.add(new TextRenderable(this.renderer, {
                 id: `file-cur-${i}`,
                 content: t`${cursor}`,
             }))
-            topLine.add(new TextRenderable(this.renderer, {
+            row.add(new TextRenderable(this.renderer, {
                 id: `file-chk-${i}`,
                 content: t`${check}`,
             }))
-            topLine.add(new TextRenderable(this.renderer, {
+            row.add(new TextRenderable(this.renderer, {
                 id: `file-fmt-${i}`,
-                content: t`${fg(file.format === "pdf" ? theme.accent.orange : file.format === "epub" ? theme.accent.purple : theme.accent.cyan)(file.format.toUpperCase())}`,
+                content: t`${fg(formatColor)(file.format.toUpperCase())}`,
             }))
-            topLine.add(new TextRenderable(this.renderer, {
+            row.add(new TextRenderable(this.renderer, {
                 id: `file-name-${i}`,
-                content: t`${fg(file.alreadyImported
-                    ? theme.text.subtle
-                    : isSelected ? theme.accent.green : theme.text.body
-                )(truncate(file.name, 45))}`,
+                content: t`${fg(file.alreadyImported ? theme.text.subtle : isSelected ? theme.accent.green : theme.text.body)(truncate(file.name, 45))}`,
             }))
-            topLine.add(new TextRenderable(this.renderer, {
+            row.add(new TextRenderable(this.renderer, {
                 id: `file-size-${i}`,
                 content: t`${fg(theme.text.subtle)(file.size)}${file.alreadyImported ? fg(theme.text.subtle)(" imported") : ""}`,
             }))
 
-            // Bottom line: directory path
-            const bottomLine = new BoxRenderable(this.renderer, {
-                id: `file-bot-${i}`,
-                width: "100%",
-                height: 1,
-                flexDirection: "row",
-                paddingLeft: 5,
-            })
-            bottomLine.add(new TextRenderable(this.renderer, {
-                id: `file-dir-${i}`,
-                content: t`${fg(theme.text.subtle)(truncate(file.dir, 60))}`,
-            }))
-
-            row.add(topLine)
-            row.add(bottomLine)
             this.fileList.add(row)
             this.cardRenderables.push(row)
         }
