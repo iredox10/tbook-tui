@@ -32,6 +32,7 @@ import { AiModal } from "../components/ai-modal"
 import { CodeModal } from "../components/code-modal"
 import { TTSService } from "../services/tts"
 import { renderImageToTerminal, supportsImages } from "../utils/terminal-image"
+import { renderParagraph } from "../utils/render-paragraph"
 import { exportBook } from "../services/export"
 import { loadConfig, updateConfig } from "../services/config"
 import type { App } from "../app"
@@ -380,6 +381,12 @@ export class ReaderView {
 
     private renderChapter() {
         const th = getTheme()
+        const textProps = {
+            wrapMode: "word" as const,
+            selectable: true,
+            selectionBg: th.accent.blue,
+            selectionFg: th.bg.void,
+        }
 
         for (const node of this.chapterTextNodes) {
             try { this.readingPane.remove(node.id) } catch { }
@@ -1760,8 +1767,7 @@ export class ReaderView {
         if (!chapter) return
         const th = getTheme()
         for (let i = 0; i < chapter.paragraphs.length; i++) {
-            const nodeIdx = i + 3
-            const node = this.chapterTextNodes[nodeIdx]
+            const node = this.paraNodes[i]
             const para = chapter.paragraphs[i]
             if (node && para) {
                 const restored = renderParagraph(this.renderer, para, i, th)
