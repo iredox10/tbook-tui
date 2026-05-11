@@ -321,7 +321,7 @@ export class LibraryView {
 
         const title = new TextRenderable(this.renderer, {
             id: `book-title-${index}`,
-            content: t`${isSelected ? fg(theme.accent.blue)("▸ ") : "  "}${bold(fg(isSelected ? theme.accent.blue : theme.text.bright)(truncate(book.title, 36)))}${isReading ? " " + fg(theme.accent.amber)("●") : progress >= 100 ? " " + fg(theme.accent.green)("✓") : ""}`,
+            content: t`${isSelected ? fg(theme.accent.blue)("▸ ") : "  "}${bold(fg(isSelected ? theme.accent.blue : theme.text.bright)(truncate(book.title, 36)))}${isReading ? fg(theme.accent.amber)(" ●") : progress >= 100 ? fg(theme.accent.green)(" ✓") : ""}`,
         })
 
         const author = new TextRenderable(this.renderer, {

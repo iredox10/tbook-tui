@@ -417,7 +417,7 @@ export class ReaderView {
         // Separator — decorative rule
         const chSep = new TextRenderable(this.renderer, {
             id: "chapter-sep",
-            content: `\n  ${fg(th.text.subtle)("◆  ◆  ◆")}\n`,
+            content: t`\n  ${fg(th.text.subtle)("◆  ◆  ◆")}\n`,
         })
         this.readingPane.add(chSep)
         this.chapterTextNodes.push(chSep)
