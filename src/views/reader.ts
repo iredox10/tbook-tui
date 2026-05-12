@@ -98,6 +98,7 @@ export class ReaderView {
     private minimapContainer!: BoxRenderable
     private minimapContent!: TextRenderable
     private minimapInterval: Timer | null = null
+    private statusBarMounted = false
 
     private inputHandler?: (sequence: string) => boolean
     private destroyed = false
@@ -121,6 +122,7 @@ export class ReaderView {
     private selectParaIdx = 0
     private selectCharIdx = 0
     private selectionAnchor: { paraIdx: number; charIdx: number } | null = null
+    private pendingMotionCount = ""
 
     constructor(renderer: CliRenderer, app: App) {
         this.renderer = renderer
@@ -153,10 +155,10 @@ export class ReaderView {
         }
         this.wordsReadThisSession = 0
 
-        if (this.timerInterval) clearInterval(this.timerInterval)
-        this.timerInterval = setInterval(() => {
-            this.updateStatusProgress()
-        }, 5000)
+        if (this.timerInterval) {
+            clearInterval(this.timerInterval)
+            this.timerInterval = null
+        }
 
         // Show loading spinner
         const loading = new TextRenderable(this.renderer, {
@@ -213,6 +215,9 @@ export class ReaderView {
         this.buildLayout()
         this.renderChapter()
         this.setupKeybinds()
+        this.timerInterval = setInterval(() => {
+            this.updateStatusProgress()
+        }, 5000)
     }
 
     // ── Layout ──────────────────────────────────────────────────
@@ -300,6 +305,7 @@ export class ReaderView {
 
         // ── Status bar ──
         this.statusBar = new StatusBar({ renderer: this.renderer, mode: "reader" })
+        this.statusBarMounted = true
 
         if (!this.sidebarVisible) this.sidebar.visible = false
 
@@ -640,7 +646,7 @@ export class ReaderView {
     // ── Progress ────────────────────────────────────────────────
 
     private updateStatusProgress() {
-        if (this.destroyed) return
+        if (this.destroyed || !this.readingPane || !this.parsedBook) return
 
         const percent = this.parsedBook.chapters.length > 0
             ? Math.round(((this.currentChapter + 1) / this.parsedBook.chapters.length) * 100)
@@ -669,13 +675,17 @@ export class ReaderView {
             timeInfo = `${minsLeft}m left`
         }
 
-        this.statusBar.setReaderProgress(
-            this.currentChapter,
-            this.parsedBook.chapters.length,
-            percent,
-            timeInfo,
-            chapterPercent
-        )
+        if (this.statusBarMounted) {
+            try {
+                this.statusBar.setReaderProgress(
+                    this.currentChapter,
+                    this.parsedBook.chapters.length,
+                    percent,
+                    timeInfo,
+                    chapterPercent
+                )
+            } catch { }
+        }
 
         // Continuously save scroll position so we can resume later
         this.saveScrollPosition()
@@ -931,96 +941,144 @@ export class ReaderView {
 
             // ── SELECT MODE input handling ──
             if (this.selectMode) {
+                const isMotionKey = sequence === "j" || sequence === "k" || sequence === "h" || sequence === "l"
+                    || sequence === "w" || sequence === "b"
+                    || sequence === " "
+                    || sequence === "\x1b[A" || sequence === "\x1b[B" || sequence === "\x1b[C" || sequence === "\x1b[D"
+                if (/^[0-9]$/.test(sequence)) {
+                    if (this.pendingMotionCount.length > 0 || sequence !== "0") {
+                        this.pendingMotionCount += sequence
+                    }
+                    return true
+                }
+
+                // Backward-compatible color selection: `1m`/`2m`/... still works.
+                if (!isMotionKey && this.pendingMotionCount.length === 1) {
+                    switch (this.pendingMotionCount) {
+                        case "1":
+                            this.highlightColor = "yellow"
+                            showToast(this.renderer, "🟡 Highlight color: Yellow", "info")
+                            break
+                        case "2":
+                            this.highlightColor = "green"
+                            showToast(this.renderer, "🟢 Highlight color: Green", "info")
+                            break
+                        case "3":
+                            this.highlightColor = "blue"
+                            showToast(this.renderer, "🔵 Highlight color: Blue", "info")
+                            break
+                        case "4":
+                            this.highlightColor = "pink"
+                            showToast(this.renderer, "🩷 Highlight color: Pink", "info")
+                            break
+                    }
+                }
+
                 switch (sequence) {
                     case "\x1b": // Escape — exit select mode
                     case "s":    // toggle off
                     case "q":    // exit select mode
+                        this.pendingMotionCount = ""
                         this.exitSelectMode()
                         return true
                     case "j":
-                    case "\x1b[B": // down — next paragraph
-                        this.selectMoveParagraph(1)
+                    case "\x1b[B": // down — next line
+                        this.repeatSelectMotion(1, (delta) => this.selectMoveLine(delta))
                         return true
                     case "k":
-                    case "\x1b[A": // up — prev paragraph
-                        this.selectMoveParagraph(-1)
+                    case "\x1b[A": // up — previous line
+                        this.repeatSelectMotion(-1, (delta) => this.selectMoveLine(delta))
                         return true
                     case "l":
                     case "\x1b[C": // right — next char
-                        this.selectMoveChar(1)
+                        this.repeatSelectMotion(1, (delta) => this.selectMoveChar(delta))
                         return true
                     case "h":
                     case "\x1b[D": // left — prev char
-                        this.selectMoveChar(-1)
+                        this.repeatSelectMotion(-1, (delta) => this.selectMoveChar(delta))
                         return true
                     case "w": // advance word
-                        this.selectMoveWord(1)
+                        this.repeatSelectMotion(1, (delta) => this.selectMoveWord(delta))
                         return true
                     case "b": // prev word
-                        this.selectMoveWord(-1)
+                        this.repeatSelectMotion(-1, (delta) => this.selectMoveWord(delta))
                         return true
                     case " ": // space — advance word
-                        this.selectMoveWord(1)
+                        this.repeatSelectMotion(1, (delta) => this.selectMoveWord(delta))
                         return true
                     case "\r":
                     case "\n": // enter — confirm selection
+                        this.pendingMotionCount = ""
                         this.confirmSelect()
                         return true
                     case "c":
                     case "C": // copy
+                        this.pendingMotionCount = ""
                         this.copySelectedOrCode()
                         return true
                     case "-":
                     case "_":
                     case "+":
                     case "=":
+                        this.pendingMotionCount = ""
                         this.toggleCodeCollapse()
                         return true
                     case "D":
                     case "d": // dictionary with selected word
+                        this.pendingMotionCount = ""
                         this.confirmSelectAndDict()
                         return true
                     case "m": // mark/highlight selected text
                     case "M":
+                        this.pendingMotionCount = ""
                         this.highlightSelectedText()
                         return true
                     case "v": // toggle visual selection (set anchor)
                     case "V":
+                        this.pendingMotionCount = ""
                         this.toggleVisualMode()
                         return true
                     case "E":
                     case "e": // AI Explain
+                        this.pendingMotionCount = ""
                         this.showAiExplain()
                         return true
                     case "p":
                     case "P": // TTS
+                        this.pendingMotionCount = ""
                         this.toggleTTS(true)
                         return true
                     // Multi-color highlight selection (1-4)
                     case "1":
+                        this.pendingMotionCount = ""
                         this.highlightColor = "yellow"
                         showToast(this.renderer, "🟡 Highlight color: Yellow", "info")
                         this.renderSelection()
                         return true
                     case "2":
+                        this.pendingMotionCount = ""
                         this.highlightColor = "green"
                         showToast(this.renderer, "🟢 Highlight color: Green", "info")
                         this.renderSelection()
                         return true
                     case "3":
+                        this.pendingMotionCount = ""
                         this.highlightColor = "blue"
                         showToast(this.renderer, "🔵 Highlight color: Blue", "info")
                         this.renderSelection()
                         return true
                     case "4":
+                        this.pendingMotionCount = ""
                         this.highlightColor = "pink"
                         showToast(this.renderer, "🩷 Highlight color: Pink", "info")
                         this.renderSelection()
                         return true
                     case "n": // Add note to highlight
+                        this.pendingMotionCount = ""
                         this.highlightWithNote()
                         return true
                 }
+                this.pendingMotionCount = ""
                 return true // consume all other input in select mode
             }
 
@@ -1340,13 +1398,17 @@ export class ReaderView {
         if (this.focusMode) {
             this.sidebarVisible = false
             this.sidebar.width = 0
-            this.statusBar.destroy()
+            if (this.statusBarMounted) {
+                try { this.statusBar.destroy() } catch { }
+                this.statusBarMounted = false
+            }
             showToast(this.renderer, "🎯 Focus mode ON — press f to restore", "info")
         } else {
             this.sidebarVisible = true
             this.sidebar.width = 20
             // Recreate status bar (it was destroyed)
             this.statusBar = new StatusBar({ renderer: this.renderer, mode: "reader" })
+            this.statusBarMounted = true
             this.statusBar.setMode("reader")
             this.updateStatusProgress()
             showToast(this.renderer, "📖 Focus mode OFF", "info")
@@ -1452,19 +1514,72 @@ export class ReaderView {
 
     private findNearestSelectableParagraph(startIdx: number): number {
         const chapter = this.parsedBook.chapters[this.currentChapter]
-        if (!chapter || chapter.paragraphs.length === 0) return 0
+        if (!chapter || chapter.paragraphs.length === 0) return -1
 
         const clamped = Math.max(0, Math.min(startIdx, chapter.paragraphs.length - 1))
-        if (this.getParaText(clamped).length > 0) return clamped
+        if (this.getParaText(clamped).trim().length > 0) return clamped
 
         for (let radius = 1; radius < chapter.paragraphs.length; radius++) {
             const left = clamped - radius
-            if (left >= 0 && this.getParaText(left).length > 0) return left
+            if (left >= 0 && this.getParaText(left).trim().length > 0) return left
             const right = clamped + radius
-            if (right < chapter.paragraphs.length && this.getParaText(right).length > 0) return right
+            if (right < chapter.paragraphs.length && this.getParaText(right).trim().length > 0) return right
         }
 
-        return clamped
+        return -1
+    }
+
+    /** Use real rendered paragraph coordinates when available, fallback to estimates */
+    private getParagraphTopLine(paraIdx: number): number {
+        const estimated = this.getEstimatedLineOffset(paraIdx)
+        const node = this.paraNodes[paraIdx]
+        if (!node || typeof node.y !== "number" || !Number.isFinite(node.y)) return estimated
+
+        const y = node.y
+        if (y < 0) return estimated
+
+        const viewportTop = this.readingPane?.scrollTop || 0
+        const viewportHeight = this.readingPane?.viewport?.height || 30
+        const scrollHeight = this.readingPane?.scrollHeight || 0
+        const maxReasonable = Math.max(scrollHeight, viewportTop + viewportHeight * 4, estimated + viewportHeight * 4)
+        if (y > maxReasonable) return estimated
+
+        // Reject transient layout coordinates that can cause false jumps to chapter start.
+        if (Math.abs(y - estimated) > Math.max(40, viewportHeight * 2)) return estimated
+        return y
+    }
+
+    /** Find paragraph nearest a viewport target line (stable in fullscreen/resizes) */
+    private getViewportAnchorParagraphIndex(): number {
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter || chapter.paragraphs.length === 0) return -1
+
+        const viewportTop = this.readingPane.scrollTop
+        const viewportHeight = this.readingPane.viewport?.height || 30
+        const targetLine = viewportTop + Math.floor(viewportHeight / 3)
+
+        let bestIdx = -1
+        let bestDistance = Number.POSITIVE_INFINITY
+
+        for (let i = 0; i < chapter.paragraphs.length; i++) {
+            if (this.getParaText(i).trim().length === 0) continue
+            const node = this.paraNodes[i]
+            const top = this.getParagraphTopLine(i)
+            const span = node && typeof node.height === "number"
+                ? Math.max(1, node.height)
+                : this.getEstimatedParagraphLineSpan(i)
+            const bottom = top + span - 1
+
+            if (targetLine >= top && targetLine <= bottom) return i
+
+            const distance = targetLine < top ? (top - targetLine) : (targetLine - bottom)
+            if (distance < bestDistance) {
+                bestDistance = distance
+                bestIdx = i
+            }
+        }
+
+        return bestIdx
     }
 
     private enterSelectMode() {
@@ -1479,31 +1594,39 @@ export class ReaderView {
         this.selectMode = true
         this.visualMode = false
         this.selectionAnchor = null
+        this.pendingMotionCount = ""
 
-        // Anchor selection to current viewport using text-layout estimates.
-        const viewportTop = this.readingPane.scrollTop
-        const viewportHeight = this.readingPane.viewport?.height || 30
-        const targetLine = viewportTop + Math.floor(viewportHeight / 3)
-        let estimatedIdx = 0
-        let cumulativeTop = 6
-
-        for (let i = 0; i < chapter.paragraphs.length; i++) {
-            const span = this.getEstimatedParagraphLineSpan(i)
-            const bottom = cumulativeTop + span - 1
-            if (targetLine <= bottom) {
-                estimatedIdx = i
-                break
-            }
-            estimatedIdx = i
-            cumulativeTop += span
+        // Anchor selection to current viewport using actual rendered positions when possible.
+        const viewportAnchor = this.getViewportAnchorParagraphIndex()
+        const nearest = this.findNearestSelectableParagraph(viewportAnchor >= 0 ? viewportAnchor : 0)
+        if (nearest < 0) {
+            this.selectMode = false
+            showToast(this.renderer, "No selectable text in this chapter", "info")
+            return
         }
-
-        this.selectParaIdx = this.findNearestSelectableParagraph(estimatedIdx)
+        this.selectParaIdx = nearest
         this.selectCharIdx = 0
 
-        this.statusBar.setMode("select")
-        showToast(this.renderer, "✎ SELECT — h/l char · w/b word · j/k para · v visual · c copy · Enter open code · Esc exit", "info")
-        this.renderSelection()
+        if (this.statusBarMounted) {
+            try { this.statusBar.setMode("select") } catch { }
+        }
+        showToast(this.renderer, "✎ SELECT — h/l char · w/b word · j/k line · v visual · c copy · Enter open code · Esc exit", "info")
+        try {
+            this.renderSelection()
+        } catch (err) {
+            // Retry once after a clean chapter rerender to recover from stale node refs.
+            try {
+                const scrollTop = this.readingPane.scrollTop
+                this.renderChapter()
+                this.readingPane.scrollTo(scrollTop)
+                this.renderSelection()
+            } catch {
+                this.selectMode = false
+                this.visualMode = false
+                this.selectionAnchor = null
+                showToast(this.renderer, `Select mode failed: ${err}`, "error")
+            }
+        }
     }
 
     private rerenderCurrentChapterPreserveViewport(chapterIndex: number, scrollTop: number) {
@@ -1523,7 +1646,22 @@ export class ReaderView {
         this.selectMode = false
         this.visualMode = false
         this.selectionAnchor = null
-        this.statusBar.setMode("reader")
+        this.pendingMotionCount = ""
+        if (this.statusBarMounted) {
+            try { this.statusBar.setMode("reader") } catch { }
+        }
+    }
+
+    private consumeMotionCount(): number {
+        const count = this.pendingMotionCount ? parseInt(this.pendingMotionCount, 10) : 1
+        this.pendingMotionCount = ""
+        if (!Number.isFinite(count) || count <= 0) return 1
+        return Math.min(count, 200)
+    }
+
+    private repeatSelectMotion(delta: number, move: (delta: number) => void) {
+        const count = this.consumeMotionCount()
+        for (let i = 0; i < count; i++) move(delta)
     }
 
     private toggleVisualMode() {
@@ -1606,17 +1744,58 @@ export class ReaderView {
 
         let i = this.selectCharIdx
         if (delta > 0) {
-            while (i < text.length && text[i] !== ' ') i++
-            while (i < text.length && text[i] === ' ') i++
+            while (i < text.length && /\S/.test(text[i] || "")) i++
+            while (i < text.length && /\s/.test(text[i] || "")) i++
             if (i >= text.length) return this.selectMoveParagraph(1, true)
         } else {
             i--
-            while (i >= 0 && text[i] === ' ') i--
-            while (i >= 0 && text[i] !== ' ') i--
+            while (i >= 0 && /\s/.test(text[i] || "")) i--
+            while (i >= 0 && /\S/.test(text[i] || "")) i--
             i++ // Start of word
             if (i < 0) return this.selectMoveParagraph(-1, true)
         }
         this.selectCharIdx = Math.max(0, Math.min(i, text.length - 1))
+        this.renderSelection()
+    }
+
+    private getNextSelectableParagraph(fromIdx: number, delta: number): number {
+        const chapter = this.parsedBook.chapters[this.currentChapter]
+        if (!chapter || delta === 0) return -1
+        for (let i = fromIdx + delta; i >= 0 && i < chapter.paragraphs.length; i += delta) {
+            if (this.getParaText(i).trim().length > 0) return i
+        }
+        return -1
+    }
+
+    private selectMoveLine(delta: number) {
+        const text = this.getParaText(this.selectParaIdx)
+        if (!text) return this.selectMoveParagraph(delta, true)
+
+        const charsPerLine = this.getEstimatedCharsPerLine()
+        const currentLine = Math.floor(this.selectCharIdx / charsPerLine)
+        const preferredCol = this.selectCharIdx % charsPerLine
+        const targetLine = currentLine + delta
+
+        if (targetLine >= 0 && targetLine * charsPerLine < text.length) {
+            this.selectCharIdx = Math.min(targetLine * charsPerLine + preferredCol, text.length - 1)
+            this.renderSelection()
+            return
+        }
+
+        const nextParaIdx = this.getNextSelectableParagraph(this.selectParaIdx, delta > 0 ? 1 : -1)
+        if (nextParaIdx < 0) return
+
+        if (!this.visualMode) this.restoreParagraph(this.selectParaIdx)
+        this.selectParaIdx = nextParaIdx
+        const nextText = this.getParaText(nextParaIdx)
+        if (!nextText) return
+
+        if (delta > 0) {
+            this.selectCharIdx = Math.min(preferredCol, Math.max(0, nextText.length - 1))
+        } else {
+            const lastLine = Math.max(0, Math.floor((nextText.length - 1) / charsPerLine))
+            this.selectCharIdx = Math.min(lastLine * charsPerLine + preferredCol, nextText.length - 1)
+        }
         this.renderSelection()
     }
 
@@ -1625,14 +1804,19 @@ export class ReaderView {
         if (!chapter) return
 
         let newIdx = this.selectParaIdx + delta
-        while (newIdx >= 0 && newIdx < chapter.paragraphs.length && this.getParaText(newIdx).length === 0) {
+        while (newIdx >= 0 && newIdx < chapter.paragraphs.length && this.getParaText(newIdx).trim().length === 0) {
             newIdx += delta
         }
         if (newIdx < 0 || newIdx >= chapter.paragraphs.length) return
 
         if (!this.visualMode) this.restoreParagraph(this.selectParaIdx)
         this.selectParaIdx = newIdx
-        this.selectCharIdx = jumpToEnd && delta < 0 ? Math.max(0, this.getParaText(newIdx).length - 1) : 0
+        const nextText = this.getParaText(newIdx)
+        if (jumpToEnd && delta < 0) {
+            this.selectCharIdx = Math.max(0, nextText.length - 1)
+        } else {
+            this.selectCharIdx = Math.max(0, Math.min(this.selectCharIdx, Math.max(0, nextText.length - 1)))
+        }
         this.renderSelection()
     }
 
@@ -1686,14 +1870,15 @@ export class ReaderView {
         }
 
         // Only scroll if the cursor paragraph is outside the visible viewport
-        const estimatedLine = this.getEstimatedLineOffset(this.selectParaIdx)
+        const charsPerLine = this.getEstimatedCharsPerLine()
+        const cursorLine = this.getParagraphTopLine(this.selectParaIdx) + Math.floor(this.selectCharIdx / charsPerLine)
         const viewportTop = this.readingPane.scrollTop
         const viewportHeight = this.readingPane.viewport?.height || 30
         const viewportBottom = viewportTop + viewportHeight
 
-        if (estimatedLine < viewportTop + 2 || estimatedLine > viewportBottom - 3) {
+        if (cursorLine < viewportTop + 2 || cursorLine > viewportBottom - 3) {
             // Cursor is outside visible area — scroll to center it
-            this.readingPane.scrollTo(Math.max(0, estimatedLine - Math.floor(viewportHeight / 2)))
+            this.readingPane.scrollTo(Math.max(0, cursorLine - Math.floor(viewportHeight / 2)))
         }
     }
 
@@ -2349,7 +2534,10 @@ export class ReaderView {
         this.vocabularyPanel?.destroy()
         this.annotationsPanel?.destroy()
         this.rsvpReader?.destroy()
-        this.statusBar.destroy()
+        if (this.statusBarMounted) {
+            try { this.statusBar.destroy() } catch { }
+            this.statusBarMounted = false
+        }
         try { this.renderer.root.remove(this.container.id) } catch { }
     }
 }

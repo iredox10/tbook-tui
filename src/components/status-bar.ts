@@ -19,6 +19,7 @@ export class StatusBar {
     private renderer: CliRenderer
     private clockInterval: ReturnType<typeof setInterval> | null = null
     private showClock = true
+    private destroyed = false
 
     constructor(opts: StatusBarOptions) {
         this.renderer = opts.renderer
@@ -63,15 +64,23 @@ export class StatusBar {
     }
 
     private startClock() {
-        if (this.clockInterval) return
+        if (this.destroyed || this.clockInterval) return
         this.clockInterval = setInterval(() => {
-            if (this.showClock) {
+            if (this.destroyed || !this.showClock) return
+            try {
                 const now = new Date()
                 const time = `${now.getHours().toString().padStart(2, "0")}:${now.getMinutes().toString().padStart(2, "0")}`
                 // Only update center if it's currently empty or was a clock before
                 const contentStr = typeof this.centerText.content === "string" ? this.centerText.content : this.centerText.content.toString()
                 if (!contentStr.includes("Ch") && !contentStr.includes("min")) {
                     this.centerText.content = t`${fg(theme.text.subtle)(time)}`
+                }
+            } catch {
+                // Prevent background clock updates from crashing after teardown races.
+                this.destroyed = true
+                if (this.clockInterval) {
+                    clearInterval(this.clockInterval)
+                    this.clockInterval = null
                 }
             }
         }, 30000)
@@ -93,6 +102,7 @@ export class StatusBar {
     }
 
     setMode(mode: "library" | "reader" | "stats" | "splash" | "select") {
+        if (this.destroyed) return
         switch (mode) {
             case "splash":
                 this.leftText.content = t`${fg(theme.accent.cyan)("TBOOK")} v1.0`
@@ -107,7 +117,7 @@ export class StatusBar {
                 break
             case "select":
                 this.leftText.content = t`${bold(fg(theme.accent.amber)("✎ SELECT"))}`
-                this.rightText.content = this.truncateHints("h/l Word · j/k Para · v Visual · m Mark · D Dict · Esc Exit", 30)
+                this.rightText.content = this.truncateHints("h/l Char · j/k Line · v Visual · m Mark · D Dict · Esc Exit", 30)
                 break
             case "stats":
                 this.rightText.content = this.truncateHints("q Back · ← → Week", 25)
@@ -116,6 +126,7 @@ export class StatusBar {
     }
 
     setReaderProgress(chapter: number, totalChapters: number, percent: number, timeInfo?: string, chapterPercent?: number) {
+        if (this.destroyed) return
         const bar = progressBar(percent, 20)
         const color = progressColor(percent)
         this.leftText.content = t`${fg(color)(bar)} ${fg(theme.text.muted)(`${percent}%`)}`
@@ -124,16 +135,20 @@ export class StatusBar {
     }
 
     setLibraryInfo(bookCount: number) {
+        if (this.destroyed) return
         this.leftText.content = t`${fg(theme.accent.cyan)("📚")} ${fg(theme.text.muted)(`${bookCount} book${bookCount !== 1 ? "s" : ""}`)}`
     }
 
     setReadingEstimate(wordsLeft: number) {
+        if (this.destroyed) return
         const wpm = 250
         const mins = Math.ceil(wordsLeft / wpm)
         this.centerText.content = t`${fg(theme.text.subtle)(`~${mins} min left`)}`
     }
 
     destroy() {
+        if (this.destroyed) return
+        this.destroyed = true
         if (this.clockInterval) {
             clearInterval(this.clockInterval)
             this.clockInterval = null

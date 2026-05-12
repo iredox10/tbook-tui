@@ -5,6 +5,20 @@ A premium **Terminal Book Reader** built with [OpenTUI](https://opentui.com) —
 ![TBook](https://img.shields.io/badge/TUI-Book%20Reader-7aa2f7?style=for-the-badge)
 ![Bun](https://img.shields.io/badge/Bun-Runtime-f5c542?style=for-the-badge)
 ![TypeScript](https://img.shields.io/badge/TypeScript-blue?style=for-the-badge)
+![npm](https://img.shields.io/npm/v/iredox-tbook-tui?style=for-the-badge)
+
+## 🎬 10-second demo
+
+![TBook TUI demo](assets/tbook-demo-10s.gif)
+
+MP4: [`assets/tbook-demo-10s.mp4`](assets/tbook-demo-10s.mp4)
+
+## ⚡ Install in 10 seconds
+
+```bash
+bun add -g iredox-tbook-tui
+tbook-tui
+```
 
 ## ✨ Features
 
@@ -80,6 +94,13 @@ A premium **Terminal Book Reader** built with [OpenTUI](https://opentui.com) —
 # Prerequisites: Bun + Zig
 bun install
 bun start
+```
+
+Or use the published CLI:
+
+```bash
+bun add -g iredox-tbook-tui
+tbook-tui
 ```
 
 For PDF support, install `poppler-utils`:

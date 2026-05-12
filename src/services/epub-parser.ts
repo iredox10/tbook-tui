@@ -66,9 +66,10 @@ export async function parseEpub(filePath: string): Promise<ParsedBook> {
             // Skip truly empty chapters (no text AND no images)
             if (wordCount < 5 && paragraphs.length < 2 && imageCount === 0) continue
 
-            // Prefer TOC title, then in-chapter heading, then a generic fallback.
-            const tocTitle = findTocTitle(epub, item.id, tocLookup)
-                || deriveChapterTitleFromParagraphs(paragraphs)
+            // Prefer in-chapter heading/title first so displayed title matches visible content.
+            // Fall back to TOC mapping when chapter content has no usable heading.
+            const tocTitle = deriveChapterTitleFromParagraphs(paragraphs)
+                || findTocTitle(epub, item.id, tocLookup)
                 || `Chapter ${chapters.length + 1}`
 
             chapters.push({
