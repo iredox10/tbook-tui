@@ -331,12 +331,12 @@ export class ImportView {
                 case "g":
                     this.selectedIndex = 0
                     this.renderFileList()
-                    this.fileList.scrollTo(0)
+                    this.scrollToSelected()
                     return true
                 case "G":
                     this.selectedIndex = Math.max(0, this.filteredFiles.length - 1)
                     this.renderFileList()
-                    this.fileList.scrollTo(this.selectedIndex * 3)
+                    this.scrollToSelected()
                     return true
                 // Multi-select
                 case " ":
@@ -716,14 +716,42 @@ export class ImportView {
         }
     }
 
+    private scrollToSelected() {
+        if (this.filteredFiles.length === 0) return
+
+        // Keep selected row fully visible (same behavior goal as library)
+        const rowHeight = 2
+        const paddingTop = 2
+
+        const rowTop = paddingTop + this.selectedIndex * rowHeight
+        const rowBottom = rowTop + rowHeight
+
+        const currentScroll = Number(this.fileList.scrollTop || 0)
+        const measuredViewport = this.fileList.viewport?.height
+        const explicitHeight = this.fileList.height
+        const viewportHeight = typeof measuredViewport === "number"
+            ? measuredViewport
+            : (typeof explicitHeight === "number" ? explicitHeight : 20)
+
+        if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) {
+            this.fileList.scrollTo(Math.max(0, rowTop - 2))
+            return
+        }
+
+        if (rowTop < currentScroll) {
+            this.fileList.scrollTo(rowTop)
+        } else if (rowBottom > currentScroll + viewportHeight) {
+            this.fileList.scrollTo(Math.max(0, rowBottom - viewportHeight))
+        }
+    }
+
     private moveSelection(delta: number) {
         if (this.filteredFiles.length === 0) return
         this.selectedIndex = Math.max(0, Math.min(this.filteredFiles.length - 1, this.selectedIndex + delta))
         this.renderFileList()
-
-        // Scroll to keep selected item visible (each row is 3 lines tall)
-        const targetLine = this.selectedIndex * 3
-        this.fileList.scrollTo(targetLine)
+        this.scrollToSelected()
+        // Re-apply after layout settles to avoid occasional stale viewport values
+        setTimeout(() => this.scrollToSelected(), 0)
     }
 
     // ── Import logic ──
