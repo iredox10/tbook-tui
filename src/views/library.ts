@@ -367,20 +367,22 @@ export class LibraryView {
 
     private scrollToSelected() {
         if (this.filteredBooks.length === 0) return
-        
-        // Calculate position based on the known fixed sizes
+
         const cardHeight = 4
         const gap = 1
         const paddingTop = 2
-        
+
         const cardTop = paddingTop + this.selectedIndex * (cardHeight + gap)
         const cardBottom = cardTop + cardHeight
-        
-        const currentScroll = this.bookList.scrollTop
-        const viewportHeight = this.bookList.viewport?.height || this.bookList.height || 20
-        
-        if (viewportHeight <= 0) {
-            // Layout not ready yet, just scroll blindly
+
+        const currentScroll = Number(this.bookList.scrollTop || 0)
+        const measuredViewport = this.bookList.viewport?.height
+        const explicitHeight = this.bookList.height
+        const viewportHeight = typeof measuredViewport === "number"
+            ? measuredViewport
+            : (typeof explicitHeight === "number" ? explicitHeight : 20)
+
+        if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) {
             this.bookList.scrollTo(Math.max(0, cardTop - 2))
             return
         }
@@ -388,7 +390,7 @@ export class LibraryView {
         if (cardTop < currentScroll) {
             this.bookList.scrollTo(cardTop)
         } else if (cardBottom > currentScroll + viewportHeight) {
-            this.bookList.scrollTo(cardBottom - viewportHeight)
+            this.bookList.scrollTo(Math.max(0, cardBottom - viewportHeight))
         }
     }
 
@@ -397,6 +399,8 @@ export class LibraryView {
         this.selectedIndex = Math.max(0, Math.min(this.filteredBooks.length - 1, this.selectedIndex + delta))
         this.renderBookCards()
         this.scrollToSelected()
+        // Re-apply after layout settles to avoid stale viewport values
+        setTimeout(() => this.scrollToSelected(), 0)
     }
 
     private openSelectedBook() {

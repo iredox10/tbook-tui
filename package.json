@@ -25,7 +25,8 @@
     "@iarna/toml": "^2.2.5",
     "@opentui/core": "^0.1.102",
     "epub2": "^3.0.2",
-    "node-html-parser": "^7.1.0"
+    "node-html-parser": "^7.1.0",
+    "tbook-tui": "."
   },
   "devDependencies": {
     "@types/bun": "latest",
