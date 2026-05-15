@@ -113,7 +113,7 @@ export class StatusBar {
                 this.rightText.content = this.truncateHints("↑↓ Navigate · ⏎ Open · / Search · n Import · d Delete · ? Help", 25)
                 break
             case "reader":
-                this.rightText.content = this.truncateHints("j/k Scroll · s Select · t TOC · / Search · D Dict · ? Help", 35)
+                this.rightText.content = this.truncateHints("j/k Scroll · s Select · t TOC · / Search · D Dict · O Session Export · ? Help", 35)
                 break
             case "select":
                 this.leftText.content = t`${bold(fg(theme.accent.amber)("✎ SELECT"))}`

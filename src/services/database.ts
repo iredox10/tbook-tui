@@ -413,6 +413,13 @@ export function getSessionHistory(limit: number = 20): SessionHistoryRecord[] {
     ).all(limit) as SessionHistoryRecord[]
 }
 
+export function getSessionHistoryForBook(bookId: number, limit: number = 50): SessionHistoryRecord[] {
+    const db = getDb()
+    return db.query(
+        "SELECT * FROM session_history WHERE book_id = ? ORDER BY ended_at DESC LIMIT ?"
+    ).all(bookId, limit) as SessionHistoryRecord[]
+}
+
 // ─────────────────────────────────────────────────────────────
 // Cross-Book Annotations
 // ─────────────────────────────────────────────────────────────

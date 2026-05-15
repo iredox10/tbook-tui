@@ -5,7 +5,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "fs"
 import { join, basename } from "path"
 import { homedir } from "os"
-import { getBookmarks, getAllHighlightsWithBooks, type BookmarkRecord, type BookRecord, type CrossBookHighlight } from "./database"
+import { getBookmarks, getHighlights, getSessionHistoryForBook, getAllHighlightsWithBooks, type BookmarkRecord, type BookRecord, type CrossBookHighlight } from "./database"
 import type { ParsedBook } from "./epub-parser"
 
 export interface ExportOptions {
@@ -16,12 +16,28 @@ export interface ExportOptions {
     includeMetadata: boolean
 }
 
+export interface SessionExportOptions {
+    outputDir: string
+    includeBookmarks: boolean
+    includeHighlights: boolean
+    includeSessionHistory: boolean
+    includeChapterToc: boolean
+}
+
 const defaultOptions: ExportOptions = {
     format: "obsidian",
     outputDir: join(homedir(), "Documents", "TBook Export"),
     includeBookmarks: true,
     includeHighlights: true,
     includeMetadata: true,
+}
+
+const defaultSessionOptions: SessionExportOptions = {
+    outputDir: join(homedir(), "Documents", "TBook Export"),
+    includeBookmarks: true,
+    includeHighlights: true,
+    includeSessionHistory: true,
+    includeChapterToc: true,
 }
 
 /**
@@ -208,6 +224,169 @@ export function exportAllAnnotations(
             success: false,
             error: err instanceof Error ? err.message : String(err),
             count: 0,
+        }
+    }
+}
+
+/**
+ * Export a per-book reading session pack optimized for Obsidian.
+ * Includes recent sessions, highlights, bookmarks, and chapter map.
+ */
+export function exportReadingSessionToObsidian(
+    book: BookRecord,
+    parsedBook: ParsedBook,
+    options: Partial<SessionExportOptions> = {},
+): { path: string; success: boolean; error?: string; sessions: number; highlights: number; bookmarks: number } {
+    const opts = { ...defaultSessionOptions, ...options }
+
+    try {
+        if (!existsSync(opts.outputDir)) {
+            mkdirSync(opts.outputDir, { recursive: true })
+        }
+
+        const sessions = opts.includeSessionHistory ? getSessionHistoryForBook(book.id, 100) : []
+        const highlights = opts.includeHighlights ? getHighlights(book.id) : []
+        const bookmarks = opts.includeBookmarks ? getBookmarks(book.id) : []
+
+        const safeTitle = book.title.replace(/[/\\:*?"<>|]/g, "-").trim()
+        const dateTag = new Date().toISOString().slice(0, 10)
+        const filePath = join(opts.outputDir, `${safeTitle} - Reading Session (${dateTag}).md`)
+
+        const totalSessionMinutes = sessions.reduce((sum, s) => sum + (s.minutes_read || 0), 0)
+        const totalSessionWords = sessions.reduce((sum, s) => sum + (s.words_read || 0), 0)
+        const progress = book.total_chapters > 0
+            ? Math.round((book.current_chapter / book.total_chapters) * 100)
+            : 0
+
+        const byChapterHighlights = new Map<number, typeof highlights>()
+        for (const hl of highlights) {
+            const list = byChapterHighlights.get(hl.chapter) || []
+            list.push(hl)
+            byChapterHighlights.set(hl.chapter, list)
+        }
+
+        const byChapterBookmarks = new Map<number, BookmarkRecord[]>()
+        for (const bm of bookmarks) {
+            const list = byChapterBookmarks.get(bm.chapter) || []
+            list.push(bm)
+            byChapterBookmarks.set(bm.chapter, list)
+        }
+
+        let content = ""
+        content += "---\n"
+        content += `title: "${book.title} — Reading Session"\n`
+        content += `book: "${book.title}"\n`
+        content += `author: "${book.author}"\n`
+        content += `exported: ${new Date().toISOString()}\n`
+        content += `source: "tbook-tui"\n`
+        content += `progress: ${progress}\n`
+        content += `current_chapter: ${book.current_chapter + 1}\n`
+        content += `session_count: ${sessions.length}\n`
+        content += `highlight_count: ${highlights.length}\n`
+        content += `bookmark_count: ${bookmarks.length}\n`
+        content += "tags:\n"
+        content += "  - reading\n"
+        content += "  - tbook\n"
+        content += "  - session\n"
+        content += "---\n\n"
+
+        content += `# 📘 ${book.title} — Reading Session Export\n\n`
+        content += `- **Author:** ${book.author}\n`
+        content += `- **Progress:** ${progress}% (Chapter ${book.current_chapter + 1}/${Math.max(1, book.total_chapters)})\n`
+        content += `- **Recent session time:** ${totalSessionMinutes} min\n`
+        content += `- **Recent session words:** ${totalSessionWords.toLocaleString()}\n`
+        content += `- **Exported:** ${new Date().toLocaleString()}\n\n`
+
+        if (opts.includeSessionHistory) {
+            content += "## 🕒 Session Timeline\n\n"
+            if (sessions.length === 0) {
+                content += "_No recorded sessions yet._\n\n"
+            } else {
+                for (const s of sessions) {
+                    const ended = s.ended_at ? new Date(s.ended_at).toLocaleString() : "Unknown"
+                    const span = s.start_chapter === s.end_chapter
+                        ? `Ch.${s.start_chapter + 1}`
+                        : `Ch.${s.start_chapter + 1}–${s.end_chapter + 1}`
+                    content += `- ${ended} — **${span}** · ${s.minutes_read}m · ${s.words_read.toLocaleString()} words\n`
+                }
+                content += "\n"
+            }
+        }
+
+        if (opts.includeChapterToc) {
+            content += "## 📑 Chapter Map\n\n"
+            for (let i = 0; i < parsedBook.chapters.length; i++) {
+                const ch = parsedBook.chapters[i]!
+                const bmCount = (byChapterBookmarks.get(i) || []).length
+                const hlCount = (byChapterHighlights.get(i) || []).length
+                const marker = i === book.current_chapter ? "📍" : "-"
+                content += `${marker} **Ch.${i + 1}** ${ch.title}  _(bookmarks: ${bmCount}, highlights: ${hlCount})_\n`
+            }
+            content += "\n"
+        }
+
+        if (opts.includeBookmarks) {
+            content += "## 🔖 Bookmarks\n\n"
+            if (bookmarks.length === 0) {
+                content += "_No bookmarks._\n\n"
+            } else {
+                for (const bm of bookmarks) {
+                    const chapterTitle = parsedBook.chapters[bm.chapter]?.title || `Chapter ${bm.chapter + 1}`
+                    const label = bm.label?.trim() || `Position ${bm.scroll_position}`
+                    content += `- **Ch.${bm.chapter + 1} — ${chapterTitle}**: ${label}\n`
+                }
+                content += "\n"
+            }
+        }
+
+        if (opts.includeHighlights) {
+            content += "## 📝 Highlights\n\n"
+            if (highlights.length === 0) {
+                content += "_No highlights yet._\n\n"
+            } else {
+                const colorIcons: Record<string, string> = {
+                    yellow: "🟡", green: "🟢", blue: "🔵", pink: "🩷",
+                }
+
+                const chapters = Array.from(byChapterHighlights.keys()).sort((a, b) => a - b)
+                for (const chapter of chapters) {
+                    const chapterTitle = parsedBook.chapters[chapter]?.title || `Chapter ${chapter + 1}`
+                    content += `### Ch.${chapter + 1}: ${chapterTitle}\n\n`
+                    const items = byChapterHighlights.get(chapter) || []
+                    for (const hl of items) {
+                        const icon = colorIcons[hl.color] || "📌"
+                        const quote = hl.text.replace(/\n+/g, " ").trim()
+                        content += `- ${icon} "${quote}"\n`
+                        if (hl.note?.trim()) {
+                            content += `  - 💬 ${hl.note.trim()}\n`
+                        }
+                    }
+                    content += "\n"
+                }
+            }
+        }
+
+        content += "## ✅ Next Session\n\n"
+        content += "- [ ] Continue from current chapter\n"
+        content += "- [ ] Review highlights\n"
+        content += "- [ ] Add summary notes\n"
+
+        writeFileSync(filePath, content, "utf-8")
+        return {
+            path: filePath,
+            success: true,
+            sessions: sessions.length,
+            highlights: highlights.length,
+            bookmarks: bookmarks.length,
+        }
+    } catch (err) {
+        return {
+            path: "",
+            success: false,
+            error: err instanceof Error ? err.message : String(err),
+            sessions: 0,
+            highlights: 0,
+            bookmarks: 0,
         }
     }
 }

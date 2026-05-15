@@ -33,7 +33,7 @@ import { CodeModal } from "../components/code-modal"
 import { TTSService } from "../services/tts"
 import { renderImageToTerminal, supportsImages } from "../utils/terminal-image"
 import { renderParagraph } from "../utils/render-paragraph"
-import { exportBook } from "../services/export"
+import { exportBook, exportReadingSessionToObsidian } from "../services/export"
 import { loadConfig, updateConfig } from "../services/config"
 import { posix as pathPosix } from "path"
 import type { App } from "../app"
@@ -908,6 +908,7 @@ export class ReaderView {
             "ai_summarize": "E",
             "export_chapter": "x",
             "export_all": "X",
+            "export_session": "O",
             "deep_link": "L",
             "quit": "q"
         }
@@ -1243,6 +1244,12 @@ export class ReaderView {
                     this.exportAllAnnotationsAction()
                     return true
 
+                // Export per-book reading session pack (Obsidian)
+                case "O":
+                case "o":
+                    this.exportSessionToObsidian()
+                    return true
+
                 // Quit
                 case "q":
                     if (this.timerInterval) clearInterval(this.timerInterval)
@@ -1348,6 +1355,23 @@ export class ReaderView {
             showToast(this.renderer, `📝 Exported to ${result.path}`, "success")
         } else {
             showToast(this.renderer, `Export failed: ${result.error}`, "error")
+        }
+    }
+
+    private exportSessionToObsidian() {
+        const config = loadConfig()
+        const result = exportReadingSessionToObsidian(this.book, this.parsedBook, {
+            outputDir: config.exportDir,
+        })
+
+        if (result.success) {
+            showToast(
+                this.renderer,
+                `📦 Session exported (${result.sessions} sessions, ${result.highlights} highlights, ${result.bookmarks} bookmarks) → ${result.path}`,
+                "success",
+            )
+        } else {
+            showToast(this.renderer, `Session export failed: ${result.error}`, "error")
         }
     }
 

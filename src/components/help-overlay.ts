@@ -102,6 +102,7 @@ export class HelpOverlay {
                     ["D", "Dictionary (select text + D)"],
                     ["E", "AI summarize chapter"],
                     ["x", "Export chapter to Markdown"],
+                    ["O", "Export reading session pack (Obsidian)"],
                     ["L", "Copy paragraph deep link"],
                     ["X", "Export all annotations"],
                     ["q", "Back to library"],
