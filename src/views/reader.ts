@@ -10,7 +10,7 @@ import {
     CliRenderEvents,
     t, bold, italic, fg, bg,
 } from "@opentui/core"
-import { theme, truncate, progressBar, progressColor, formatDuration, getActiveTheme, setActiveTheme, getTheme } from "../utils/theme"
+import { theme, truncate, progressBar, progressColor, formatDuration, getActiveTheme, setActiveTheme, getTheme, formatInlineRichText } from "../utils/theme"
 import { parseEpub, type ParsedBook, type Chapter } from "../services/epub-parser"
 import { parsePdf } from "../services/pdf-parser"
 import { formatTable } from "../utils/html-to-text"
@@ -35,6 +35,7 @@ import { renderImageToTerminal, supportsImages } from "../utils/terminal-image"
 import { renderParagraph } from "../utils/render-paragraph"
 import { exportBook } from "../services/export"
 import { loadConfig, updateConfig } from "../services/config"
+import { posix as pathPosix } from "path"
 import type { App } from "../app"
 
 // Zoom levels: padding on each side of the reading pane
@@ -565,26 +566,13 @@ export class ReaderView {
                 }
 
                 default: {
-                    // Regular paragraph — style inline code markers
-                    let content = p.text || ""
-                    if (content.includes("`")) {
-                        // Replace `code` backtick markers with styled inline code
-                        content = content.replace(/`([^`]+)`/g, (_, code) => {
-                            return `\x1b[36m\x1b[48;5;236m ${code} \x1b[0m`
-                        })
-                        node = new TextRenderable(this.renderer, {
-                            id: `para-${i}`,
-                            ...textProps,
-                            content: content ? `\n${content}\n` : "",
-                        })
-                    } else {
-                        node = new TextRenderable(this.renderer, {
-                            id: `para-${i}`,
-                            ...textProps,
-                            content: content ? `\n${content}\n` : "",
-                            fg: th.text.body,
-                        })
-                    }
+                    const content = formatInlineRichText(p.text || "")
+                    node = new TextRenderable(this.renderer, {
+                        id: `para-${i}`,
+                        ...textProps,
+                        content: content ? `\n${content}\n` : "",
+                        fg: th.text.body,
+                    })
                     break
                 }
             }
@@ -2103,16 +2091,9 @@ export class ReaderView {
                 break
             }
             default: {
-                let content = para.text || ""
-                if (content.includes("`")) {
-                    content = content.replace(/`([^`]+)`/g, (_: string, code: string) => {
-                        return `\x1b[36m\x1b[48;5;236m ${code} \x1b[0m`
-                    })
-                    node.content = content ? `\n${content}\n` : ""
-                } else {
-                    node.content = content ? `\n${content}\n` : ""
-                    node.fg = th.text.body
-                }
+                const content = formatInlineRichText(para.text || "")
+                node.content = content ? `\n${content}\n` : ""
+                node.fg = th.text.body
                 break
             }
         }
@@ -2477,26 +2458,64 @@ export class ReaderView {
         if (!src || !this.parsedBook.imageMap) return undefined
         const map = this.parsedBook.imageMap
 
-        // Try exact match
-        if (map.has(src)) return map.get(src)
+        const normalize = (v: string): string =>
+            (v || "")
+                .trim()
+                .replace(/\\/g, "/")
+                .replace(/^\.\//, "")
+                .replace(/^\//, "")
+                .split("#")[0]!
+                .split("?")[0]!
 
-        // Try decoded URL
-        try {
-            const decoded = decodeURIComponent(src)
-            if (map.has(decoded)) return map.get(decoded)
-        } catch { }
+        const chapterHref = this.parsedBook.chapters[this.currentChapter]?.sourceHref || ""
+        const chapterDir = chapterHref.includes("/")
+            ? chapterHref.slice(0, chapterHref.lastIndexOf("/") + 1)
+            : ""
 
-        // Try just the filename part
-        const fileName = src.split("/").pop() || ""
-        if (fileName && map.has(fileName)) return map.get(fileName)
+        const decodeURIComponentSafe = (v: string): string => {
+            try { return decodeURIComponent(v) } catch { return v }
+        }
 
-        // Try stripping leading /images/ prefix (epub2 format)
-        const stripped = src.replace(/^\/images\/[^/]+\//, "")
-        if (map.has(stripped)) return map.get(stripped)
+        const raw = normalize(src)
+        const candidates = new Set<string>()
+        const addCandidate = (v: string) => {
+            if (!v) return
+            candidates.add(v)
+            candidates.add(v.toLowerCase())
+            candidates.add(decodeURIComponentSafe(v))
+            candidates.add(decodeURIComponentSafe(v).toLowerCase())
+            candidates.add(v.replace(/^\.\//, ""))
+            candidates.add(v.replace(/^\//, ""))
+        }
 
-        // Try each key in map that ends with the same filename
+        addCandidate(src)
+        addCandidate(raw)
+
+        // Relative-to-chapter asset references (../images/foo.png etc.)
+        if (chapterDir && raw) {
+            addCandidate(pathPosix.normalize(pathPosix.join(chapterDir, raw)))
+            addCandidate(pathPosix.normalize(pathPosix.join(chapterDir, "./" + raw)))
+        }
+
+        const fileName = raw.split("/").pop() || ""
+        if (fileName) addCandidate(fileName)
+
+        for (const candidate of candidates) {
+            if (map.has(candidate)) return map.get(candidate)
+        }
+
+        // Try stripping epub2 virtual image prefix
+        for (const candidate of candidates) {
+            const stripped = candidate.replace(/^images\/[^/]+\//, "")
+            if (map.has(stripped)) return map.get(stripped)
+            const strippedAbs = candidate.replace(/^\/images\/[^/]+\//, "")
+            if (map.has(strippedAbs)) return map.get(strippedAbs)
+        }
+
+        // Fallback: suffix match (filename or trailing path)
+        const tail2 = raw.split("/").slice(-2).join("/")
         for (const [key, buf] of map) {
-            if (key.endsWith(fileName) || key.endsWith(src.split("/").slice(-2).join("/"))) {
+            if ((fileName && key.endsWith(fileName)) || (tail2 && key.endsWith(tail2))) {
                 return buf
             }
         }

@@ -6,7 +6,7 @@
 import type { CliRenderer } from "@opentui/core"
 import { TextRenderable, t, bold, italic, fg, bg } from "@opentui/core"
 import type { ThemeColors } from "./theme"
-import { formatInlineCode } from "./theme"
+import { formatInlineRichText } from "./theme"
 import { formatTable } from "./html-to-text"
 import type { StyledParagraph } from "./html-to-text"
 
@@ -114,10 +114,8 @@ export function renderParagraph(
         }
 
         default: {
-            let content = para.text || ""
-            if (content.includes("`")) {
-                content = content.replace(/`([^`]+)`/g, (_, code) => formatInlineCode(code))
-            }
+            const raw = para.text || ""
+            const content = formatInlineRichText(raw)
             if (content) {
                 return new TextRenderable(renderer, {
                     id: `para-${index}`,

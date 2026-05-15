@@ -20,6 +20,7 @@ export interface Chapter {
     order: number
     paragraphs: StyledParagraph[]
     wordCount: number
+    sourceHref?: string // manifest href for relative asset resolution (images/links)
 }
 
 export interface ParsedBook {
@@ -72,12 +73,17 @@ export async function parseEpub(filePath: string): Promise<ParsedBook> {
                 || findTocTitle(epub, item.id, tocLookup)
                 || `Chapter ${chapters.length + 1}`
 
+            if (isLikelyBoilerplateSection(tocTitle, paragraphs, wordCount)) {
+                continue
+            }
+
             chapters.push({
                 id: item.id,
                 title: tocTitle,
                 order: chapters.length,
                 paragraphs,
                 wordCount,
+                sourceHref: normalizeHref(epub.manifest?.[item.id]?.href || item.href || ""),
             })
         } catch (err) {
             // Skip chapters that fail to parse
@@ -102,13 +108,21 @@ export async function parseEpub(filePath: string): Promise<ParsedBook> {
                 epub.getImage(id, (err: Error | null, data: Buffer, mimeType: string) => {
                     if (!err && data) {
                         const href = manifest[id]?.href || ''
+                        const normalizedHref = normalizeHref(href)
+
                         // Store with multiple possible key formats
                         imageMap.set(href, data)
+                        if (normalizedHref) imageMap.set(normalizedHref, data)
+
                         // epub2 rewrites src to /images/id/path
                         imageMap.set(`/images/${id}/${href}`, data)
+                        if (normalizedHref) imageMap.set(`/images/${id}/${normalizedHref}`, data)
+
                         // Also store by just the filename part
                         const fileName = href.split('/').pop() || ''
+                        const normalizedFileName = normalizedHref.split('/').pop() || ''
                         if (fileName) imageMap.set(fileName, data)
+                        if (normalizedFileName) imageMap.set(normalizedFileName, data)
                     }
                     resolve()
                 })
@@ -200,6 +214,31 @@ function deriveChapterTitleFromParagraphs(paragraphs: StyledParagraph[]): string
         }
     }
     return null
+}
+
+function isLikelyBoilerplateSection(title: string, paragraphs: StyledParagraph[], wordCount: number): boolean {
+    const normalizedTitle = (title || "").toLowerCase().trim()
+    const joined = paragraphs.map(p => p.text || "").join(" ").toLowerCase()
+
+    if (/(table of contents|contents|copyright|title page|about this book|imprint)/.test(normalizedTitle) && wordCount < 220) {
+        return true
+    }
+
+    const tocLikeLines = paragraphs.filter(p => {
+        const text = (p.text || "").trim()
+        if (!text) return false
+        return /\.{4,}\s*(\d+|[ivxlcdm]+)$/i.test(text) || /^\d+(?:\.\d+)*\s+.+/.test(text)
+    }).length
+
+    if (wordCount < 240 && tocLikeLines >= Math.max(3, Math.ceil(paragraphs.length * 0.35))) {
+        return true
+    }
+
+    if (wordCount < 120 && /(all rights reserved|isbn|published by|cover design|printed in)/.test(joined)) {
+        return true
+    }
+
+    return false
 }
 
 /**

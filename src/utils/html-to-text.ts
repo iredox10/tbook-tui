@@ -21,6 +21,36 @@ export interface StyledParagraph {
     imageAlt?: string // image alt text
 }
 
+function getSemanticTokens(node: any): string[] {
+    const epubType = (node.getAttribute?.("epub:type") || "").toLowerCase()
+    const role = (node.getAttribute?.("role") || "").toLowerCase()
+    const cls = (node.getAttribute?.("class") || "").toLowerCase()
+    const combined = `${epubType} ${role} ${cls}`.trim()
+    return combined ? combined.split(/\s+/).filter(Boolean) : []
+}
+
+function hasSemantic(node: any, ...tokens: string[]): boolean {
+    const set = new Set(getSemanticTokens(node))
+    return tokens.some(token => set.has(token.toLowerCase()))
+}
+
+function semanticHeadingLabel(node: any): string | null {
+    const direct = cleanText(node.getAttribute?.("title") || node.getAttribute?.("aria-label") || "")
+    if (direct) return direct
+
+    for (const child of node.childNodes || []) {
+        const tag = (child.tagName || "").toLowerCase()
+        if (/^h[1-6]$/.test(tag)) {
+            const txt = cleanText(child.textContent || "")
+            if (txt) return txt
+        }
+    }
+
+    const txt = cleanText(node.textContent || "")
+    if (!txt) return null
+    return txt.length > 70 ? txt.slice(0, 67).trimEnd() + "..." : txt
+}
+
 /**
  * Convert an HTML chapter string into an array of styled paragraphs.
  * Handles headings, paragraphs, lists, blockquotes, code blocks,
@@ -44,6 +74,30 @@ export function htmlToStyledParagraphs(html: string): StyledParagraph[] {
         }
 
         const tag = (node.tagName || "").toLowerCase()
+
+        // ── EPUB semantic structure (epub:type/ARIA role) ──
+        if (hasSemantic(node, "doc-pagebreak", "pagebreak")) {
+            const label = cleanText(node.getAttribute?.("title") || node.getAttribute?.("aria-label") || node.textContent || "")
+            paragraphs.push({ type: "separator", text: label ? `Page break: ${label}` : "" })
+            return
+        }
+
+        if (
+            ["section", "article", "div", "main", "nav"].includes(tag) &&
+            hasSemantic(
+                node,
+                "chapter", "part", "appendix", "foreword", "preface", "prologue",
+                "epilogue", "conclusion", "index", "bibliography",
+            )
+        ) {
+            const hasExplicitHeading = !!node.querySelector?.("h1, h2, h3, h4, h5, h6")
+            if (!hasExplicitHeading) {
+                const heading = semanticHeadingLabel(node)
+                if (heading) {
+                    paragraphs.push({ type: "heading", text: heading, level: 1 })
+                }
+            }
+        }
 
         // ── Headings ──
         if (/^h[1-6]$/.test(tag)) {
@@ -87,9 +141,9 @@ export function htmlToStyledParagraphs(html: string): StyledParagraph[] {
 
         // ── Footnotes (aside/section with epub:type or role) ──
         if ((tag === "aside" || tag === "section" || tag === "div") &&
-            (node.getAttribute?.("epub:type")?.includes("footnote") ||
-             node.getAttribute?.("role") === "doc-footnote" ||
-             node.getAttribute?.("role") === "doc-endnote")) {
+            (hasSemantic(node, "footnote", "endnote", "doc-footnote", "doc-endnote") ||
+                node.getAttribute?.("role") === "doc-footnote" ||
+                node.getAttribute?.("role") === "doc-endnote")) {
             const id = node.getAttribute?.("id") || ""
             const text = cleanText(node.textContent)
             if (text) {
@@ -250,6 +304,10 @@ export function htmlToStyledParagraphs(html: string): StyledParagraph[] {
         // ── Container elements — recurse into children ──
         const containerTags = ["section", "article", "div", "main", "aside", "nav", "header", "footer", "details", "summary"]
         if (containerTags.includes(tag)) {
+            // Skip navigational landmark blocks that are usually boilerplate TOC fragments
+            if (tag === "nav" && hasSemantic(node, "toc", "landmarks")) {
+                return
+            }
             for (const child of node.childNodes) {
                 walkNode(child, depth)
             }
@@ -378,22 +436,35 @@ function cleanTextWithInlineCode(node: any): string {
             }
         }
 
-        // <strong> / <b> markup
+        // <strong> / <b> markup — preserve emphasis markers
         if (tag === "strong" || tag === "b") {
-            parts.push(n.textContent || "")
+            const text = cleanText(n.textContent || "")
+            if (text) parts.push(`**${text}**`)
             return
         }
 
-        // <em> / <i> markup
+        // <em> / <i> markup — preserve emphasis markers
         if (tag === "em" || tag === "i") {
-            parts.push(n.textContent || "")
+            const text = cleanText(n.textContent || "")
+            if (text) parts.push(`*${text}*`)
             return
         }
 
-        // <a> links — include text
+        // <a> links — include text and preserve noteref links
         if (tag === "a") {
-            parts.push(n.textContent || "")
-            return
+            const text = cleanText(n.textContent || "")
+            const href = n.getAttribute?.("href") || ""
+            if (hasSemantic(n, "noteref", "doc-noteref") || n.getAttribute?.("role") === "doc-noteref") {
+                const ref = href.replace(/^#/, "") || text
+                if (ref) {
+                    parts.push(`[^${ref}]`)
+                    return
+                }
+            }
+            if (text) {
+                parts.push(text)
+                return
+            }
         }
 
         // Skip scripts, styles
@@ -401,7 +472,7 @@ function cleanTextWithInlineCode(node: any): string {
 
         // Handle inline images — push a text representation
         if (tag === "img" || tag === "image") {
-            const alt = node.getAttribute?.("alt") || ""
+            const alt = n.getAttribute?.("alt") || ""
             if (alt) parts.push(`[${alt}]`)
             else parts.push("[Image]")
             return
@@ -409,15 +480,15 @@ function cleanTextWithInlineCode(node: any): string {
 
         // ── Footnote references (superscript links) ──
         if (tag === "sup" || (tag === "a" &&
-            (node.getAttribute?.("epub:type")?.includes("noteref") ||
-             node.getAttribute?.("role") === "doc-noteref"))) {
-            const href = node.getAttribute?.("href") || ""
+            (hasSemantic(n, "noteref", "doc-noteref") || n.getAttribute?.("role") === "doc-noteref"))) {
+            const href = n.getAttribute?.("href") || ""
             if (href.includes("note") || href.includes("fn") || href.includes("footnote") ||
-                node.getAttribute?.("epub:type")?.includes("noteref")) {
+                hasSemantic(n, "noteref", "doc-noteref")) {
                 const ref = href.replace(/^#/, "")
-                const text = node.textContent?.trim() || ""
-                if (text) {
-                    parts.push(`[${text}]`)
+                const text = n.textContent?.trim() || ""
+                const marker = ref || text
+                if (marker) {
+                    parts.push(`[^${marker}]`)
                     return
                 }
             }
