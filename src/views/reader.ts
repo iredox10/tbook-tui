@@ -1037,31 +1037,7 @@ export class ReaderView {
                         this.pendingMotionCount = ""
                         this.toggleTTS(true)
                         return true
-                    // Multi-color highlight selection (1-4)
-                    case "1":
-                        this.pendingMotionCount = ""
-                        this.highlightColor = "yellow"
-                        showToast(this.renderer, "🟡 Highlight color: Yellow", "info")
-                        this.renderSelection()
-                        return true
-                    case "2":
-                        this.pendingMotionCount = ""
-                        this.highlightColor = "green"
-                        showToast(this.renderer, "🟢 Highlight color: Green", "info")
-                        this.renderSelection()
-                        return true
-                    case "3":
-                        this.pendingMotionCount = ""
-                        this.highlightColor = "blue"
-                        showToast(this.renderer, "🔵 Highlight color: Blue", "info")
-                        this.renderSelection()
-                        return true
-                    case "4":
-                        this.pendingMotionCount = ""
-                        this.highlightColor = "pink"
-                        showToast(this.renderer, "🩷 Highlight color: Pink", "info")
-                        this.renderSelection()
-                        return true
+
                     case "n": // Add note to highlight
                         this.pendingMotionCount = ""
                         this.highlightWithNote()
@@ -1193,7 +1169,7 @@ export class ReaderView {
                     return true
                 }
 
-                // Phase 4: Export to Obsidian/Logseq
+                // Phase 4: AI Summarize
                 case "E":
                     this.showAiSummarize()
                     return true
@@ -1824,8 +1800,12 @@ export class ReaderView {
         if (!this.visualMode) this.restoreParagraph(this.selectParaIdx)
         this.selectParaIdx = newIdx
         const nextText = this.getParaText(newIdx)
-        if (jumpToEnd && delta < 0) {
-            this.selectCharIdx = Math.max(0, nextText.length - 1)
+        if (jumpToEnd) {
+            if (delta < 0) {
+                this.selectCharIdx = Math.max(0, nextText.length - 1)
+            } else {
+                this.selectCharIdx = 0
+            }
         } else {
             this.selectCharIdx = Math.max(0, Math.min(this.selectCharIdx, Math.max(0, nextText.length - 1)))
         }
@@ -2440,6 +2420,20 @@ export class ReaderView {
         const estimatedLine = this.getEstimatedLineOffset(match.paraIdx)
         const viewportHeight = this.readingPane.viewport?.height || 30
         this.readingPane.scrollTo(Math.max(0, estimatedLine - Math.floor(viewportHeight / 3)))
+
+        // Enter select mode at the match
+        this.selectMode = true
+        this.visualMode = false
+        this.selectionAnchor = null
+        this.pendingMotionCount = ""
+        this.selectParaIdx = match.paraIdx
+        this.selectCharIdx = match.charIdx
+        
+        if (this.statusBarMounted) {
+            try { this.statusBar.setMode("select") } catch { }
+        }
+        
+        this.renderSelection()
 
         showToast(this.renderer, `🔍 Match ${this.searchMatchIndex + 1}/${this.searchMatches.length}`, "info")
     }
