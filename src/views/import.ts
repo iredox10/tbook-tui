@@ -846,7 +846,9 @@ export class ImportView {
         try {
             const parsed = file.format === "pdf"
                 ? await parsePdf(file.path)
-                : await parseEpub(file.path)
+                : file.format === "epub"
+                    ? await parseEpub(file.path)
+                    : await (await import("../services/md-parser")).parseMd(file.path)
             insertBook({
                 title: parsed.metadata.title,
                 author: parsed.metadata.author,
@@ -885,7 +887,7 @@ export class ImportView {
     // ── Direct file import (P3) ──
     private isBookFile(path: string): boolean {
         const ext = extname(path).toLowerCase()
-        if (ext !== ".epub" && ext !== ".pdf") return false
+        if (ext !== ".epub" && ext !== ".pdf" && ext !== ".md" && ext !== ".txt") return false
         try {
             return existsSync(path) && statSync(path).isFile()
         } catch { return false }
@@ -893,7 +895,7 @@ export class ImportView {
 
     private async importDirectFile(filePath: string) {
         const ext = extname(filePath).toLowerCase()
-        const format = ext === ".epub" ? "epub" : "pdf" as const
+        const format = ext === ".epub" ? "epub" : ext === ".pdf" ? "pdf" : ext === ".md" ? "md" : "txt" as const
         const name = basename(filePath, ext)
 
         // Check if already imported
@@ -908,7 +910,9 @@ export class ImportView {
         try {
             const parsed = format === "pdf"
                 ? await parsePdf(filePath)
-                : await parseEpub(filePath)
+                : format === "epub"
+                    ? await parseEpub(filePath)
+                    : await (await import("../services/md-parser")).parseMd(filePath)
 
             if (this.isDuplicate(parsed.metadata.title, parsed.metadata.author)) {
                 showToast(this.renderer, `Possible duplicate: "${truncate(parsed.metadata.title, 25)}" by ${parsed.metadata.author}`, "info")
@@ -975,7 +979,9 @@ export class ImportView {
         try {
             const parsed = file.format === "pdf"
                 ? await parsePdf(file.path)
-                : await parseEpub(file.path)
+                : file.format === "epub"
+                    ? await parseEpub(file.path)
+                    : await (await import("../services/md-parser")).parseMd(file.path)
 
             try { this.previewBox.remove("preview-loading") } catch { }
 
