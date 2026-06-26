@@ -17,6 +17,7 @@ export class ChapterTocModal {
     private visible = false
     private onSelect: (chapterIndex: number) => void
     private onClose: () => void
+    private inputHandler: ((seq: string) => boolean) | null = null
 
     constructor(
         renderer: CliRenderer,
@@ -28,7 +29,7 @@ export class ChapterTocModal {
         this.onClose = onClose
     }
 
-    show(chapters: Chapter[], currentChapter: number) {
+    show(chapters: Chapter[], currentChapter: number, completedChapters: Set<number> = new Set()) {
         if (this.visible) return
         this.visible = true
 
@@ -61,20 +62,23 @@ export class ChapterTocModal {
 
         // Build options
         const options = chapters.map((ch, i) => {
+            const isCompleted = completedChapters.has(i)
             const num = (i + 1).toString().padStart(3, " ")
-            const indicator = i === currentChapter ? "▸ " : "  "
+            const indicator = i === currentChapter ? "▸ " : isCompleted ? "✓ " : "  "
             const wordInfo = ch.wordCount > 0 ? `${(ch.wordCount / 1000).toFixed(1)}k words` : ""
             return {
-                name: `${indicator}${num}. ${truncate(ch.title, 30)}`,
+                name: `${indicator}${num}. ${truncate(ch.title, 35)}`,
                 description: wordInfo,
                 value: i.toString(),
             }
         })
 
+        const maxHeight = Math.min(chapters.length * 2 + 2, (process.stdout.rows || 40) - 10)
+
         this.select = new SelectRenderable(this.renderer, {
             id: "toc-select",
             width: "100%",
-            height: Math.min(chapters.length * 2 + 2, 30),
+            height: Math.max(10, maxHeight),
             options,
             selectedIndex: currentChapter,
             backgroundColor: "transparent",
@@ -104,19 +108,24 @@ export class ChapterTocModal {
         this.select.focus()
 
         // Input handler for closing
-        this.renderer.addInputHandler((seq: string) => {
+        this.inputHandler = (seq: string) => {
             if (!this.visible) return false
             if (seq === "q" || seq === "\x1b" || seq === "t") {
                 this.hide()
                 return true
             }
             return false
-        })
+        }
+        this.renderer.addInputHandler(this.inputHandler)
     }
 
     hide() {
         if (!this.visible) return
         this.visible = false
+        if (this.inputHandler) {
+            this.renderer.removeInputHandler(this.inputHandler)
+            this.inputHandler = null
+        }
         try { this.renderer.root.remove(this.container.id) } catch { }
         this.onClose()
     }

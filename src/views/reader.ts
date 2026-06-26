@@ -54,7 +54,7 @@ export class ReaderView {
     private renderer: CliRenderer
     private app: App
     private container!: BoxRenderable
-    private sidebar!: BoxRenderable
+    private sidebar!: ScrollBoxRenderable
     private readingPane!: ScrollBoxRenderable
     private statusBar!: StatusBar
     private book!: BookRecord
@@ -235,16 +235,22 @@ export class ReaderView {
         })
 
         // ── Left sidebar: Chapter TOC ──
-        this.sidebar = new BoxRenderable(this.renderer, {
+        this.sidebar = new ScrollBoxRenderable(this.renderer, {
             id: "reader-sidebar",
-            width: 20,
+            width: 26,
             height: "100%",
             borderStyle: "rounded",
             borderColor: th.border.normal,
-            backgroundColor: th.bg.surface,
-            flexDirection: "column",
-            paddingTop: 1,
-            paddingBottom: 1,
+            scrollbarOptions: {
+                trackOptions: { foregroundColor: th.bg.surface, backgroundColor: th.bg.surface },
+            },
+            viewportOptions: { backgroundColor: th.bg.surface },
+            contentOptions: {
+                flexDirection: "column",
+                paddingTop: 1,
+                paddingBottom: 1,
+                backgroundColor: th.bg.surface,
+            },
         })
 
         const sidebarTitle = new TextRenderable(this.renderer, {
@@ -255,7 +261,7 @@ export class ReaderView {
 
         const sep = new TextRenderable(this.renderer, {
             id: "sidebar-sep",
-            content: " " + "┄".repeat(16),
+            content: " " + "┄".repeat(22),
             fg: th.border.normal,
         })
         this.sidebar.add(sep)
@@ -358,11 +364,17 @@ export class ReaderView {
 
             const item = new TextRenderable(this.renderer, {
                 id: `sidebar-ch-${i}`,
-                content: t` ${fg(markerColor)(markerStr)}${fg(labelColor)(`${num}. ${truncate(ch.title, 13)}`)}`,
+                content: t` ${fg(markerColor)(markerStr)}${fg(labelColor)(`${num}. ${truncate(ch.title, 19)}`)}`,
             })
 
             this.sidebar.add(item)
             this.sidebarItems.push(item)
+        }
+
+        const visibleHeight = typeof this.sidebar.viewport?.height === "number" ? this.sidebar.viewport.height : 20
+        const itemY = 2 + this.currentChapter
+        if (itemY < (this.sidebar.scrollTop || 0) || itemY >= (this.sidebar.scrollTop || 0) + visibleHeight) {
+            this.sidebar.scrollTo(Math.max(0, itemY - Math.floor(visibleHeight / 2)))
         }
     }
 
@@ -1252,7 +1264,7 @@ export class ReaderView {
                 this.readingPane.focus()
             },
         )
-        this.tocModal.show(this.parsedBook.chapters, this.currentChapter)
+        this.tocModal.show(this.parsedBook.chapters, this.currentChapter, this.completedChapters)
     }
 
     private showSearch() {
