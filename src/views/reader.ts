@@ -591,20 +591,8 @@ export class ReaderView {
             }
         }
 
-        // Apply saved highlights from database
-        const highlights = getChapterHighlights(this.book.id, this.currentChapter)
-        for (const hl of highlights) {
-            if (!hl.text) continue
-            const parts = hl.text.split("\n")
-            for (let i = 0; i < parts.length; i++) {
-                const textPart = parts[i]
-                if (!textPart) continue
-                const paraIdx = hl.paragraph_index + i
-                const node = this.paraNodes[paraIdx]
-                const para = this.parsedBook.chapters[this.currentChapter]?.paragraphs[paraIdx]
-                if (!node || !para) continue
-                this.applyPersistentHighlightToNode(node, para, textPart, hl.color, !!hl.note, th)
-            }
+        for (let i = 0; i < chapter.paragraphs.length; i++) {
+            this.restoreParagraph(i)
         }
 
         // Restore saved scroll position on initial chapter load, otherwise scroll to top
@@ -1903,75 +1891,99 @@ export class ReaderView {
         }
     }
 
-    private applyPersistentHighlightToNode(
-        node: any,
-        para: any,
-        textPart: string,
-        color: string,
-        hasNote: boolean,
-        th: any,
-    ) {
-        const markColor = this.getStoredHighlightBgColor(color, hasNote, th)
-        const rawContent = (node as any).content
-        const sourceText = para?.text || ""
+    private applyHighlightsToText(text: string, paraIdx: number, highlights: any[], th: any, baseFgColor?: string): string {
+        if (!text) return text
+        const intersecting = highlights.filter(hl => {
+            const ep = hl.end_paragraph_index ?? hl.paragraph_index
+            return paraIdx >= hl.paragraph_index && paraIdx <= ep
+        })
+        if (intersecting.length === 0) return text
 
-        // For structured text nodes, rebuild using OpenTUI templates so highlight colors render reliably.
-        if (para?.type !== "code" && para?.type !== "table" && para?.type !== "image") {
-            if (!sourceText) return
-            const start = sourceText.indexOf(textPart)
-            if (start < 0) return
+        const charColors = new Array(text.length).fill(null)
 
-            const prefix = sourceText.slice(0, start)
-            const highlighted = sourceText.slice(start, start + textPart.length)
-            const suffix = sourceText.slice(start + textPart.length)
-            this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix, markColor)
-            return
+        for (const hl of intersecting) {
+            const sp = hl.paragraph_index
+            const ep = hl.end_paragraph_index ?? hl.paragraph_index
+            
+            let startChar = 0
+            let endChar = text.length - 1
+
+            if (paraIdx === sp) startChar = Math.max(0, hl.start_char ?? 0)
+            if (paraIdx === ep) endChar = Math.min(text.length - 1, hl.end_char ?? (text.length - 1))
+            
+            // Backwards compatibility for old highlights (-1 offset)
+            if (hl.start_char === -1 && hl.text) {
+                const parts = hl.text.split("\n")
+                const offset = paraIdx - sp
+                const textPart = parts[offset]
+                if (textPart) {
+                    const idx = text.indexOf(textPart)
+                    if (idx >= 0) {
+                        startChar = idx
+                        endChar = idx + textPart.length - 1
+                    }
+                }
+            }
+
+            const color = hl.note ? th.accent.orange : (this.getHighlightBgColor(hl.color, th) || th.accent.amber)
+
+            for (let i = startChar; i <= endChar; i++) {
+                if (i >= 0 && i < text.length) {
+                    charColors[i] = color
+                }
+            }
         }
 
-        // Keep ANSI replacement for rendered block strings (code/table/image placeholder).
-        if (typeof rawContent === "string") {
-            const bgAnsi = this.hexToAnsiBg(markColor)
-            const fgAnsi = this.hexToAnsiFg(th.bg.void)
-            const escapedText = textPart.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-            const regex = new RegExp(escapedText, "g")
-            node.content = rawContent.replace(regex, (match: string) => `${bgAnsi}${fgAnsi}${match}\x1b[0m`)
-            return
+        let result = ""
+        let currentChunk = ""
+        let currentColor = charColors[0]
+
+        const hexToRgb = (hex: string) => {
+            if (!hex || hex.length < 7) return "0;0;0"
+            const r = parseInt(hex.slice(1, 3), 16)
+            const g = parseInt(hex.slice(3, 5), 16)
+            const b = parseInt(hex.slice(5, 7), 16)
+            return `${r};${g};${b}`
         }
+
+        const flushChunk = () => {
+            if (!currentChunk) return
+            if (currentColor) {
+                const bgCode = `\x1b[48;2;${hexToRgb(currentColor)}m`
+                const fgCode = `\x1b[38;2;${hexToRgb(th.bg.void)}m`
+                const resetBg = `\x1b[49m`
+                const resetFg = baseFgColor ? `\x1b[38;2;${hexToRgb(baseFgColor)}m` : `\x1b[39m`
+                result += `${bgCode}${fgCode}${currentChunk}${resetFg}${resetBg}`
+            } else {
+                result += currentChunk
+            }
+            currentChunk = ""
+        }
+
+        for (let i = 0; i < text.length; i++) {
+            if (charColors[i] !== currentColor || text[i] === '\n') {
+                flushChunk()
+                currentColor = charColors[i]
+            }
+            currentChunk += text[i]
+            if (text[i] === '\n') {
+                flushChunk()
+                currentColor = charColors[i + 1] ?? null
+            }
+        }
+        flushChunk()
+
+        return result
     }
 
     private clearAllSelectionHighlights() {
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter) return
-        const th = getTheme()
         for (let i = 0; i < chapter.paragraphs.length; i++) {
             const node = this.paraNodes[i]
             const para = chapter.paragraphs[i]
             if (node && para) {
-                const restored = renderParagraph(this.renderer, para, i, th)
-                node.content = restored.content
-                node.fg = restored.fg
-            }
-        }
-
-        // Re-apply database highlights that were cleared by restoreParagraph
-        this.reapplyDatabaseHighlights()
-    }
-
-    /** Re-apply persistent highlights from the database */
-    private reapplyDatabaseHighlights() {
-        const th = getTheme()
-        const highlights = getChapterHighlights(this.book.id, this.currentChapter)
-        for (const hl of highlights) {
-            if (!hl.text) continue
-            const parts = hl.text.split("\n")
-            for (let i = 0; i < parts.length; i++) {
-                const textPart = parts[i]
-                if (!textPart) continue
-                const paraIdx = hl.paragraph_index + i
-                const node = this.paraNodes[paraIdx]
-                const para = this.parsedBook.chapters[this.currentChapter]?.paragraphs[paraIdx]
-                if (!node || !para) continue
-                this.applyPersistentHighlightToNode(node, para, textPart, hl.color, !!hl.note, th)
+                this.restoreParagraph(i)
             }
         }
     }
@@ -2018,7 +2030,12 @@ export class ReaderView {
         const node = this.paraNodes[paraIdx]
         if (!node) return
 
-        // Restore original content (no ANSI highlights)
+        const highlights = getChapterHighlights(this.book.id, this.currentChapter)
+        let baseFg = th.text.body
+        if (para.type === "quote" || para.type === "footnote") baseFg = th.text.muted
+
+        const styledText = this.applyHighlightsToText(para.text || "", paraIdx, highlights, th, baseFg)
+
         switch (para.type) {
             case "heading":
                 node.content = t`\n\n${bold(fg(
@@ -2026,10 +2043,10 @@ export class ReaderView {
                         para.level === 2 ? th.accent.blue :
                             para.level === 3 ? th.accent.cyan :
                                 th.accent.green
-                )(para.text))}\n`
+                )(styledText))}\n`
                 break
             case "quote":
-                node.content = t`\n  ${fg(th.accent.cyan)("│")} ${italic(fg(th.text.muted)(para.text))}\n`
+                node.content = t`\n  ${fg(th.accent.cyan)("│")} ${italic(fg(th.text.muted)(styledText))}\n`
                 break
             case "list-item": {
                 const indent = "  ".repeat((para.indent || 0) + 1)
@@ -2040,22 +2057,22 @@ export class ReaderView {
                     const bullets = ["•", "◦", "▪", "▸"]
                     bullet = bullets[Math.min(para.indent || 0, bullets.length - 1)]!
                 }
-                node.content = t`${indent}${fg(th.accent.cyan)(bullet)} ${fg(th.text.body)(para.text)}`
+                node.content = t`${indent}${fg(th.accent.cyan)(bullet)} ${fg(th.text.body)(styledText)}`
                 break
             }
             case "code": {
                 if (this.collapsedCodeBlocks.has(paraIdx)) {
-                    const lines = para.text.split("\n")
-                    const preview = lines.length > 2 ? lines.slice(0, 2).join("\n") + "\n..." : para.text
+                    const lines = styledText.split("\n")
+                    const preview = lines.length > 2 ? lines.slice(0, 2).join("\n") + "\n..." : styledText
                     node.content = this.formatCodeBlock(preview, (para.language || "code") + " (Collapsed)")
                 } else {
-                    node.content = this.formatCodeBlock(para.text, para.language)
+                    node.content = this.formatCodeBlock(styledText, para.language)
                 }
                 node.fg = th.text.body
                 break
             }
             case "table": {
-                const tableText = para.tableRows ? formatTable(para.tableRows) : para.text
+                const tableText = para.tableRows ? formatTable(para.tableRows) : styledText
                 node.content = `\n${tableText}\n`
                 node.fg = th.text.body
                 break
@@ -2066,17 +2083,17 @@ export class ReaderView {
                 const colors: Record<string, string> = { tip: th.accent.green, warning: th.accent.amber, note: th.accent.cyan, important: th.accent.pink }
                 const icon = icons[kind] || "📝"
                 const color = colors[kind] || th.accent.cyan
-                node.content = t`\n  ${fg(color)("┃")} ${icon} ${bold(fg(color)(kind.toUpperCase()))}\n  ${fg(color)("┃")} ${fg(th.text.body)(para.text)}\n`
+                node.content = t`\n  ${fg(color)("┃")} ${icon} ${bold(fg(color)(kind.toUpperCase()))}\n  ${fg(color)("┃")} ${fg(th.text.body)(styledText)}\n`
                 break
             }
             case "footnote": {
                 const ref = para.footnoteRef ? `[${para.footnoteRef}]` : ""
-                node.content = t`\n  ${fg(th.accent.cyan)("─")} ${fg(th.text.subtle)(`📎 ${ref}`)} ${italic(fg(th.text.muted)(para.text))}\n`
+                node.content = t`\n  ${fg(th.accent.cyan)("─")} ${fg(th.text.subtle)(`📎 ${ref}`)} ${italic(fg(th.text.muted)(styledText))}\n`
                 break
             }
             case "image": {
                 const src = para.imageSrc || ""
-                const alt = para.imageAlt || para.text || "[Image]"
+                const alt = para.imageAlt || styledText || "[Image]"
                 const imageData = this.resolveImage(src)
 
                 if (imageData && supportsImages()) {
@@ -2089,30 +2106,16 @@ export class ReaderView {
                     }
                     node.content = content
                 } else {
-                    const caption = alt !== "[Image]" ? alt : para.text || "Image"
+                    const caption = alt !== "[Image]" ? alt : styledText || "Image"
                     node.content = t`\n  ${fg(th.accent.cyan)("┌─────────────────────────────────┐")}\n  ${fg(th.accent.cyan)("│")}  ${fg(th.text.muted)("🖼️  ")}${fg(th.text.body)(caption.slice(0, 28).padEnd(28))} ${fg(th.accent.cyan)("│")}\n  ${fg(th.accent.cyan)("└─────────────────────────────────┘")}\n`
                 }
                 break
             }
             default: {
-                const content = formatInlineRichText(para.text || "")
+                const content = formatInlineRichText(styledText)
                 node.content = content ? `\n${content}\n` : ""
                 node.fg = th.text.body
                 break
-            }
-        }
-
-        // Re-apply database highlight for this paragraph if it exists
-        const highlights = getChapterHighlights(this.book.id, this.currentChapter)
-        for (const hl of highlights) {
-            if (!hl.text) continue
-            const parts = hl.text.split("\n")
-            const offset = paraIdx - hl.paragraph_index
-            if (offset >= 0 && offset < parts.length) {
-                const textPart = parts[offset]
-                if (!textPart) continue
-                const th2 = getTheme()
-                this.applyPersistentHighlightToNode(node, para, textPart, hl.color, !!hl.note, th2)
             }
         }
     }
@@ -2322,12 +2325,15 @@ export class ReaderView {
         const selectedText = this.getSelectedText()
         if (!selectedText) return
 
-        const { sp } = this.getSelectionRange()
+        const { sp, ep, sc, ec } = this.getSelectionRange()
 
         addHighlight(
             this.book.id,
             chapterIndex,
             sp,
+            ep,
+            sc,
+            ec,
             selectedText,
             this.highlightColor,
         )
@@ -2354,12 +2360,15 @@ export class ReaderView {
                 const chapterIndex = this.currentChapter
                 const scrollTop = this.readingPane.scrollTop
                 this.modalOpen = false
-                const { sp } = this.getSelectionRange()
+                const { sp, ep, sc, ec } = this.getSelectionRange()
 
                 addHighlight(
                     this.book.id,
                     chapterIndex,
                     sp,
+                    ep,
+                    sc,
+                    ec,
                     selectedText,
                     this.highlightColor,
                     note,
@@ -2518,23 +2527,41 @@ export class ReaderView {
         const fileName = raw.split("/").pop() || ""
         if (fileName) addCandidate(fileName)
 
+        const getBuffer = (key: string): Buffer | undefined => {
+            const path = map.get(key)
+            if (!path) return undefined
+            try {
+                return require("fs").readFileSync(path)
+            } catch {
+                return undefined
+            }
+        }
+
         for (const candidate of candidates) {
-            if (map.has(candidate)) return map.get(candidate)
+            const buf = getBuffer(candidate)
+            if (buf) return buf
         }
 
         // Try stripping epub2 virtual image prefix
         for (const candidate of candidates) {
             const stripped = candidate.replace(/^images\/[^/]+\//, "")
-            if (map.has(stripped)) return map.get(stripped)
+            let buf = getBuffer(stripped)
+            if (buf) return buf
+            
             const strippedAbs = candidate.replace(/^\/images\/[^/]+\//, "")
-            if (map.has(strippedAbs)) return map.get(strippedAbs)
+            buf = getBuffer(strippedAbs)
+            if (buf) return buf
         }
 
         // Fallback: suffix match (filename or trailing path)
         const tail2 = raw.split("/").slice(-2).join("/")
-        for (const [key, buf] of map) {
+        for (const [key, path] of map) {
             if ((fileName && key.endsWith(fileName)) || (tail2 && key.endsWith(tail2))) {
-                return buf
+                try {
+                    return require("fs").readFileSync(path)
+                } catch {
+                    // ignore
+                }
             }
         }
 

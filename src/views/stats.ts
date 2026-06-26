@@ -8,7 +8,7 @@ import {
     t, bold, fg,
 } from "@opentui/core"
 import { theme, progressBar, progressColor } from "../utils/theme"
-import { getWeeklyStats, getTotalStats, getTodayStats, getSessionHistory } from "../services/database"
+import { getWeeklyStats, getWeeklyStatsOffset, getTotalStats, getTodayStats, getSessionHistory } from "../services/database"
 import { loadConfig } from "../services/config"
 import { exportAllAnnotations } from "../services/export"
 import { StatusBar } from "../components/status-bar"
@@ -144,8 +144,8 @@ export class StatsView {
 
         // Trend comparison: this week vs last week
         const lastWeek = getWeeklyStatsOffset(7)
-        const thisWeekWords = weekly.reduce((s, d) => s + d.words_read, 0)
-        const lastWeekWords = lastWeek.reduce((s, d) => s + d.words_read, 0)
+        const thisWeekWords = weekly.reduce((s: number, d: any) => s + d.words_read, 0)
+        const lastWeekWords = lastWeek.reduce((s: number, d: any) => s + d.words_read, 0)
         const trend = thisWeekWords >= lastWeekWords
             ? fg(theme.accent.green)(`▲ ${((thisWeekWords - lastWeekWords) / Math.max(1, lastWeekWords) * 100).toFixed(0)}%`)
             : fg(theme.accent.pink)(`▼ ${((lastWeekWords - thisWeekWords) / Math.max(1, lastWeekWords) * 100).toFixed(0)}%`)
@@ -222,7 +222,13 @@ export class StatsView {
             gap: 2,
         })
 
-        const totalMinutes = weekly.reduce((s, d) => s + d.minutes_read, 0)
+        const totalMinutes = weekly.reduce((s: number, d: any) => s + d.minutes_read, 0)
+        const formatDuration = (mins: number) => {
+            const h = Math.floor(mins / 60)
+            const m = Math.floor(mins % 60)
+            return h > 0 ? `${h}h ${m}m` : `${m}m`
+        }
+        
         const cardData = [
             { icon: "📖", label: "Books Read", value: totals.books_read.toString(), color: theme.accent.blue },
             { icon: "📝", label: "Total Words", value: totals.total_words.toLocaleString(), color: theme.accent.purple },

@@ -64,7 +64,7 @@ function run(command: string, args: string[], maxBuffer: number = 64 * 1024 * 10
  * PDF support exists when pdftotext is available.
  */
 export function hasPdfSupport(): boolean {
-    return hasCommand("pdftotext")
+    return hasCommand("pdftohtml")
 }
 
 function readPdfInfoField(info: string, key: string): string | undefined {
@@ -89,8 +89,8 @@ function getPdfInfo(filePath: string): PdfInfo {
 
 function extractBboxLayout(filePath: string): string {
     return run(
-        "pdftotext",
-        ["-bbox-layout", "-enc", "UTF-8", filePath, "-"],
+        "pdftohtml",
+        ["-xml", "-stdout", "-enc", "UTF-8", "-q", filePath],
         256 * 1024 * 1024,
     )
 }
@@ -164,40 +164,26 @@ function parseBboxLines(html: string): BboxLine[] {
         const pageWidth = parseNum(pageNode.getAttribute("width"), 612)
         const pageHeight = parseNum(pageNode.getAttribute("height"), 792)
 
-        const lineNodes = pageNode.querySelectorAll("line")
-        for (const lineNode of lineNodes) {
-            const words: BboxWord[] = []
-            for (const wordNode of lineNode.querySelectorAll("word")) {
-                const text = normalizeWordText(wordNode.textContent || "")
-                if (!text) continue
-                words.push({
-                    xMin: parseNum(wordNode.getAttribute("xMin")),
-                    xMax: parseNum(wordNode.getAttribute("xMax")),
-                    yMin: parseNum(wordNode.getAttribute("yMin")),
-                    yMax: parseNum(wordNode.getAttribute("yMax")),
-                    text,
-                })
-            }
+        const textNodes = pageNode.querySelectorAll("text")
+        for (const textNode of textNodes) {
+            let innerHtml = textNode.innerHTML || ""
 
-            const composed = composeLineText(words)
-            if (!composed.compact) continue
+            let formattedText = innerHtml
+                .replace(/<b>(.*?)<\/b>/g, "**$1**")
+                .replace(/<i>(.*?)<\/i>/g, "*$1*")
+                .replace(/<a href="([^"]*)">(.*?)<\/a>/g, "$2")
 
-            const xMin = parseNum(
-                lineNode.getAttribute("xMin"),
-                words.length > 0 ? Math.min(...words.map(w => w.xMin)) : 0,
-            )
-            const xMax = parseNum(
-                lineNode.getAttribute("xMax"),
-                words.length > 0 ? Math.max(...words.map(w => w.xMax)) : 0,
-            )
-            const yMin = parseNum(
-                lineNode.getAttribute("yMin"),
-                words.length > 0 ? Math.min(...words.map(w => w.yMin)) : 0,
-            )
-            const yMax = parseNum(
-                lineNode.getAttribute("yMax"),
-                words.length > 0 ? Math.max(...words.map(w => w.yMax)) : 0,
-            )
+            formattedText = formattedText.replace(/<[^>]*>?/gm, "")
+
+            const text = normalizeWordText(formattedText)
+            if (!text) continue
+
+            const xMin = parseNum(textNode.getAttribute("left"))
+            const yMin = parseNum(textNode.getAttribute("top"))
+            const width = parseNum(textNode.getAttribute("width"))
+            const height = parseNum(textNode.getAttribute("height"))
+            const xMax = xMin + width
+            const yMax = yMin + height
 
             lines.push({
                 page: pageNumber,
@@ -207,9 +193,9 @@ function parseBboxLines(html: string): BboxLine[] {
                 xMax,
                 yMin,
                 yMax,
-                raw: composed.raw,
-                compact: composed.compact,
-                words,
+                raw: text,
+                compact: text,
+                words: [],
             })
         }
     }
@@ -346,20 +332,22 @@ function computeMetrics(lines: BboxLine[]): PdfMetrics {
 }
 
 function symbolDensity(text: string): number {
-    const symbols = (text.match(/[{}()[\];:=<>+\-*/%$#@`|]/g) || []).length
-    return symbols / Math.max(1, text.length)
+    const plain = text.replace(/\*\*(.*?)\*\*/g, "$1").replace(/\*(.*?)\*/g, "$1")
+    const symbols = (plain.match(/[{}()[\];:=<>+\-*/%$#@`|]/g) || []).length
+    return symbols / Math.max(1, plain.length)
 }
 
 function codeKeywordScore(text: string): number {
+    const plain = text.replace(/\*\*(.*?)\*\*/g, "$1").replace(/\*(.*?)\*/g, "$1")
     let score = 0
-    if (/\b(function|const|let|var|interface|namespace|export\s+default|import\s+.+\s+from|class\s+\w+\s*[{:]|class\s+\w+\s+extends)\b/.test(text)) score += 2
-    if (/\b(def\s+\w+\s*\(|from\s+\w+\s+import|async\s+def|lambda\b|except\s+\w+|elif\s+.+:)\b/.test(text)) score += 2
-    if (/\b(fn\s+\w+\s*\(|impl\s+\w+|struct\s+\w+|enum\s+\w+|trait\s+\w+|pub\s+fn|use\s+\w+::|match\s+\w+)\b/.test(text)) score += 2
-    if (/\b(func\s+\w+\s*\(|package\s+\w+|go\s+func|defer\s+\w+|type\s+\w+\s+struct|interface\s*\{)\b/.test(text)) score += 2
-    if (/\bSELECT\b.+\bFROM\b|\bINSERT\s+INTO\b|\bUPDATE\s+\w+\s+SET\b|\bDELETE\s+FROM\b|\bCREATE\s+(TABLE|INDEX|VIEW)\b|\bALTER\s+TABLE\b/i.test(text)) score += 2
-    if (/\b(typedef|struct|enum|union|template|#include|using\s+namespace)\b/.test(text)) score += 2
-    if (/=>|->|::|\{\}|\(\)|;\s*$/.test(text)) score += 1
-    if (/\b[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*\{?$/.test(text)) score += 1
+    if (/\b(function|const|let|var|interface|namespace|export\s+default|import\s+.+\s+from|class\s+\w+\s*[{:]|class\s+\w+\s+extends)\b/.test(plain)) score += 2
+    if (/\b(def\s+\w+\s*\(|from\s+\w+\s+import|async\s+def|lambda\b|except\s+\w+|elif\s+.+:)\b/.test(plain)) score += 2
+    if (/\b(fn\s+\w+\s*\(|impl\s+\w+|struct\s+\w+|enum\s+\w+|trait\s+\w+|pub\s+fn|use\s+\w+::|match\s+\w+)\b/.test(plain)) score += 2
+    if (/\b(func\s+\w+\s*\(|package\s+\w+|go\s+func|defer\s+\w+|type\s+\w+\s+struct|interface\s*\{)\b/.test(plain)) score += 2
+    if (/\bSELECT\b.+\bFROM\b|\bINSERT\s+INTO\b|\bUPDATE\s+\w+\s+SET\b|\bDELETE\s+FROM\b|\bCREATE\s+(TABLE|INDEX|VIEW)\b|\bALTER\s+TABLE\b/i.test(plain)) score += 2
+    if (/\b(typedef|struct|enum|union|template|#include|using\s+namespace)\b/.test(plain)) score += 2
+    if (/=>|->|::|\{\}|\(\)|;\s*$/.test(plain)) score += 1
+    if (/\b[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*\{?$/.test(plain)) score += 1
     return score
 }
 
@@ -800,7 +788,7 @@ function joinProseLines(lines: string[]): string {
         }
 
         if (out.endsWith("-") && /^[a-z]/.test(line)) {
-            out = out.slice(0, -1) + line
+            out = out + line
             continue
         }
 
@@ -896,12 +884,18 @@ function linesToStyledParagraphs(lines: BboxLine[]): StyledParagraph[] {
         const text = line.compact
         if (!text) continue
 
-        const pageChanged = !!prev && line.page !== prev.page
-        const verticalGap = !prev || pageChanged
-            ? Number.POSITIVE_INFINITY
-            : line.yMin - prev.yMax
+        const verticalGap = !prev ? Number.POSITIVE_INFINITY : line.yMin - prev.yMax
 
-        if (pageChanged || verticalGap > metrics.bodyLineHeight * 1.9) {
+        let effectiveGap = verticalGap
+        if (!!prev && line.page !== prev.page) {
+            if (line.yMin < metrics.bodyLineHeight * 6) {
+                effectiveGap = metrics.bodyLineHeight * 1.0
+            } else {
+                effectiveGap = Number.POSITIVE_INFINITY
+            }
+        }
+
+        if (effectiveGap > metrics.bodyLineHeight * 1.9) {
             flushAll()
         }
 

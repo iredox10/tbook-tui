@@ -4,6 +4,10 @@
 
 import EPub from "epub2"
 import { htmlToStyledParagraphs, type StyledParagraph } from "../utils/html-to-text"
+import { createHash } from "crypto"
+import { writeFileSync, existsSync, mkdirSync } from "fs"
+import { homedir } from "os"
+import { join } from "path"
 
 export interface BookMetadata {
     title: string
@@ -27,7 +31,7 @@ export interface ParsedBook {
     metadata: BookMetadata
     chapters: Chapter[]
     totalWords: number
-    imageMap: Map<string, Buffer> // src URL -> image data
+    imageMap: Map<string, string> // src URL -> absolute file path
 }
 
 /**
@@ -94,43 +98,60 @@ export async function parseEpub(filePath: string): Promise<ParsedBook> {
     const totalWords = chapters.reduce((sum, ch) => sum + ch.wordCount, 0)
 
     // Extract images from the epub manifest
-    const imageMap = new Map<string, Buffer>()
+    const imageMap = new Map<string, string>()
     const manifest = epub.manifest || {}
     const imageIds = Object.keys(manifest).filter(id => {
         const mediaType = (manifest[id]?.['media-type'] || '').toLowerCase()
         return mediaType.startsWith('image/')
     })
 
-    // Extract each image (non-blocking, best-effort)
-    await Promise.allSettled(
-        imageIds.map(id => new Promise<void>((resolve) => {
-            try {
-                epub.getImage(id, (err: Error | null, data: Buffer, mimeType: string) => {
-                    if (!err && data) {
-                        const href = manifest[id]?.href || ''
-                        const normalizedHref = normalizeHref(href)
+    const hash = createHash("md5").update(filePath).digest("hex")
+    const cacheDir = join(homedir(), ".tbook", "cache", "images", hash)
+    if (!existsSync(cacheDir)) {
+        mkdirSync(cacheDir, { recursive: true })
+    }
 
-                        // Store with multiple possible key formats
-                        imageMap.set(href, data)
-                        if (normalizedHref) imageMap.set(normalizedHref, data)
+    const MAX_CONCURRENT = 5
+    for (let i = 0; i < imageIds.length; i += MAX_CONCURRENT) {
+        const batch = imageIds.slice(i, i + MAX_CONCURRENT)
+        await Promise.allSettled(
+            batch.map(id => new Promise<void>((resolve) => {
+                try {
+                    epub.getImage(id, (err: Error | null, data: Buffer, mimeType: string) => {
+                        if (!err && data) {
+                            const href = manifest[id]?.href || ''
+                            const normalizedHref = normalizeHref(href)
+                            const fileName = href.split('/').pop() || id
+                            
+                            const outPath = join(cacheDir, fileName)
+                            try {
+                                writeFileSync(outPath, data)
+                            } catch (e) {
+                                resolve()
+                                return
+                            }
 
-                        // epub2 rewrites src to /images/id/path
-                        imageMap.set(`/images/${id}/${href}`, data)
-                        if (normalizedHref) imageMap.set(`/images/${id}/${normalizedHref}`, data)
+                            // Store with multiple possible key formats
+                            imageMap.set(href, outPath)
+                            if (normalizedHref) imageMap.set(normalizedHref, outPath)
 
-                        // Also store by just the filename part
-                        const fileName = href.split('/').pop() || ''
-                        const normalizedFileName = normalizedHref.split('/').pop() || ''
-                        if (fileName) imageMap.set(fileName, data)
-                        if (normalizedFileName) imageMap.set(normalizedFileName, data)
-                    }
+                            // epub2 rewrites src to /images/id/path
+                            imageMap.set(`/images/${id}/${href}`, outPath)
+                            if (normalizedHref) imageMap.set(`/images/${id}/${normalizedHref}`, outPath)
+
+                            // Also store by just the filename part
+                            const normalizedFileName = normalizedHref.split('/').pop() || ''
+                            if (fileName) imageMap.set(fileName, outPath)
+                            if (normalizedFileName) imageMap.set(normalizedFileName, outPath)
+                        }
+                        resolve()
+                    })
+                } catch {
                     resolve()
-                })
-            } catch {
-                resolve()
-            }
-        }))
-    )
+                }
+            }))
+        )
+    }
 
     return { metadata, chapters, totalWords, imageMap }
 }
@@ -204,13 +225,6 @@ function deriveChapterTitleFromParagraphs(paragraphs: StyledParagraph[]): string
     for (const p of paragraphs) {
         if (p.type === "heading" && p.text?.trim()) {
             return p.text.trim()
-        }
-    }
-    for (const p of paragraphs) {
-        const text = (p.text || "").trim()
-        if (!text) continue
-        if (p.type === "paragraph" || p.type === "quote") {
-            return text.length > 80 ? `${text.slice(0, 77)}...` : text
         }
     }
     return null

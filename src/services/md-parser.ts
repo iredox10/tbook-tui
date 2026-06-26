@@ -26,6 +26,7 @@ export async function parseMd(filePath: string): Promise<ParsedBook> {
     let inCodeBlock = false
     let codeLanguage = ""
     let codeContent: string[] = []
+    let consecutiveNewlines = 0
 
     function pushChapter() {
         if (!currentChapter) return
@@ -60,6 +61,12 @@ export async function parseMd(filePath: string): Promise<ParsedBook> {
             } else {
                 codeContent.push(line)
             }
+            consecutiveNewlines = 0
+            continue
+        }
+
+        if (line.trim() === "") {
+            consecutiveNewlines++
             continue
         }
 
@@ -106,10 +113,15 @@ export async function parseMd(filePath: string): Promise<ParsedBook> {
             if (line.trim().startsWith(">!")) {
                  pList.push({ type: "note", text: line.replace(/^>!\s*/, "").trim(), noteKind: "note" })
             } else {
-                // If previous was text, we could append, but let's keep them as separate paragraphs for now
-                pList.push({ type: "paragraph", text: line.trim() })
+                const last = pList[pList.length - 1]
+                if (last && last.type === "paragraph" && consecutiveNewlines === 0) {
+                    last.text += " " + line.trim()
+                } else {
+                    pList.push({ type: "paragraph", text: line.trim() })
+                }
             }
         }
+        consecutiveNewlines = 0
     }
 
     if (inCodeBlock) {

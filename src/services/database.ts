@@ -42,6 +42,9 @@ export interface HighlightRecord {
     book_id: number
     chapter: number
     paragraph_index: number
+    end_paragraph_index: number
+    start_char: number
+    end_char: number
     text: string
     color: string
     note: string
@@ -118,12 +121,24 @@ export function getDb(): Database {
       book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
       chapter INTEGER NOT NULL,
       paragraph_index INTEGER NOT NULL DEFAULT 0,
+      end_paragraph_index INTEGER DEFAULT 0,
+      start_char INTEGER DEFAULT 0,
+      end_char INTEGER DEFAULT 0,
       text TEXT NOT NULL,
       color TEXT DEFAULT 'yellow',
       note TEXT DEFAULT '',
       created_at TEXT DEFAULT (datetime('now'))
     )
   `)
+
+    // Schema migration for highlights table to support character offsets
+    try {
+        db.run("ALTER TABLE highlights ADD COLUMN end_paragraph_index INTEGER DEFAULT 0")
+        db.run("ALTER TABLE highlights ADD COLUMN start_char INTEGER DEFAULT 0")
+        db.run("ALTER TABLE highlights ADD COLUMN end_char INTEGER DEFAULT 0")
+    } catch {
+        // columns already exist
+    }
 
     db.run(`
     CREATE TABLE IF NOT EXISTS vocabulary (
@@ -332,11 +347,21 @@ export function getChapterHighlights(bookId: number, chapter: number): Highlight
     ).all(bookId, chapter) as HighlightRecord[]
 }
 
-export function addHighlight(bookId: number, chapter: number, paragraphIndex: number, text: string, color: string = "yellow", note: string = ""): void {
+export function addHighlight(
+    bookId: number, 
+    chapter: number, 
+    startParagraphIndex: number, 
+    endParagraphIndex: number, 
+    startChar: number, 
+    endChar: number, 
+    text: string, 
+    color: string = "yellow", 
+    note: string = ""
+): void {
     const db = getDb()
     db.run(
-        "INSERT INTO highlights (book_id, chapter, paragraph_index, text, color, note) VALUES (?, ?, ?, ?, ?, ?)",
-        [bookId, chapter, paragraphIndex, text, color, note],
+        "INSERT INTO highlights (book_id, chapter, paragraph_index, end_paragraph_index, start_char, end_char, text, color, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [bookId, chapter, startParagraphIndex, endParagraphIndex, startChar, endChar, text, color, note],
     )
 }
 
