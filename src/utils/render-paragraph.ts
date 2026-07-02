@@ -4,7 +4,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import type { CliRenderer } from "@opentui/core"
-import { TextRenderable, t, bold, italic, fg, bg } from "@opentui/core"
+import { TextRenderable, StyledText, type TextChunk, t, bold, italic, fg, bg } from "@opentui/core"
 import type { ThemeColors } from "./theme"
 import { formatInlineRichText } from "./theme"
 import { formatTable } from "./html-to-text"
@@ -115,12 +115,13 @@ export function renderParagraph(
 
         default: {
             const raw = para.text || ""
-            const content = formatInlineRichText(raw)
-            if (content) {
+            const rich = formatInlineRichText(raw)
+            if (rich.chunks.length > 0) {
+                const nl = (s: string): TextChunk => ({ __isChunk: true, text: s } as TextChunk)
                 return new TextRenderable(renderer, {
                     id: `para-${index}`,
                     ...textProps,
-                    content: `\n${content}\n`,
+                    content: new StyledText([nl("\n"), ...rich.chunks, nl("\n")]),
                 })
             }
             return new TextRenderable(renderer, {

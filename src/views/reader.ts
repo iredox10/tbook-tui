@@ -8,6 +8,7 @@ import type { CliRenderer } from "@opentui/core"
 import {
     BoxRenderable, TextRenderable, ScrollBoxRenderable,
     CliRenderEvents,
+    StyledText, type TextChunk,
     t, bold, italic, fg, bg,
 } from "@opentui/core"
 import { theme, truncate, progressBar, progressColor, formatDuration, getActiveTheme, setActiveTheme, getTheme, formatInlineRichText } from "../utils/theme"
@@ -124,6 +125,10 @@ export class ReaderView {
     private selectCharIdx = 0
     private selectionAnchor: { paraIdx: number; charIdx: number } | null = null
     private pendingMotionCount = ""
+    // Previous visual selection span (for incremental re-rendering: only
+    // restore paragraphs that left the range, instead of rebuilding the whole
+    // chapter on every cursor move).
+    private lastVisualRange: { sp: number; ep: number } | null = null
 
     constructor(renderer: CliRenderer, app: App) {
         this.renderer = renderer
@@ -578,11 +583,12 @@ export class ReaderView {
                 }
 
                 default: {
-                    const content = formatInlineRichText(p.text || "")
+                    const rich = formatInlineRichText(p.text || "")
+                    const nl = (s: string): TextChunk => ({ __isChunk: true, text: s } as TextChunk)
                     node = new TextRenderable(this.renderer, {
                         id: `para-${i}`,
                         ...textProps,
-                        content: content ? `\n${content}\n` : "",
+                        content: rich.chunks.length > 0 ? new StyledText([nl("\n"), ...rich.chunks, nl("\n")]) : "",
                         fg: th.text.body,
                     })
                     break
@@ -1517,26 +1523,6 @@ export class ReaderView {
         return -1
     }
 
-    /** Use real rendered paragraph coordinates when available, fallback to estimates */
-    private getParagraphTopLine(paraIdx: number): number {
-        const estimated = this.getEstimatedLineOffset(paraIdx)
-        const node = this.paraNodes[paraIdx]
-        if (!node || typeof node.y !== "number" || !Number.isFinite(node.y)) return estimated
-
-        const y = node.y
-        if (y < 0) return estimated
-
-        const viewportTop = this.readingPane?.scrollTop || 0
-        const viewportHeight = this.readingPane?.viewport?.height || 30
-        const scrollHeight = this.readingPane?.scrollHeight || 0
-        const maxReasonable = Math.max(scrollHeight, viewportTop + viewportHeight * 4, estimated + viewportHeight * 4)
-        if (y > maxReasonable) return estimated
-
-        // Reject transient layout coordinates that can cause false jumps to chapter start.
-        if (Math.abs(y - estimated) > Math.max(40, viewportHeight * 2)) return estimated
-        return y
-    }
-
     /** Find paragraph nearest a viewport target line (stable in fullscreen/resizes) */
     private getViewportAnchorParagraphIndex(): number {
         const chapter = this.parsedBook.chapters[this.currentChapter]
@@ -1552,10 +1538,20 @@ export class ReaderView {
         for (let i = 0; i < chapter.paragraphs.length; i++) {
             if (this.getParaText(i).trim().length === 0) continue
             const node = this.paraNodes[i]
-            const top = this.getParagraphTopLine(i)
-            const span = node && typeof node.height === "number"
-                ? Math.max(1, node.height)
-                : this.getEstimatedParagraphLineSpan(i)
+            // Prefer real layout coordinates (same convention as the minimap);
+            // fall back to the estimate only for nodes not yet laid out. The
+            // old code always routed through getParagraphTopLine, whose
+            // drifting estimate could anchor the cursor on a paragraph that
+            // was actually above the viewport — making the cursor invisible.
+            let top: number, span: number
+            if (node && typeof node.y === "number" && node.y >= 0 && Number.isFinite(node.y)
+                && typeof node.height === "number" && node.height > 0) {
+                top = node.y
+                span = node.height
+            } else {
+                top = this.getEstimatedLineOffset(i)
+                span = this.getEstimatedParagraphLineSpan(i)
+            }
             const bottom = top + span - 1
 
             if (targetLine >= top && targetLine <= bottom) return i
@@ -1583,8 +1579,7 @@ export class ReaderView {
         this.visualMode = false
         this.selectionAnchor = null
         this.pendingMotionCount = ""
-
-        // Anchor selection to current viewport using actual rendered positions when possible.
+        this.lastVisualRange = null
         const viewportAnchor = this.getViewportAnchorParagraphIndex()
         const nearest = this.findNearestSelectableParagraph(viewportAnchor >= 0 ? viewportAnchor : 0)
         if (nearest < 0) {
@@ -1635,6 +1630,7 @@ export class ReaderView {
         this.visualMode = false
         this.selectionAnchor = null
         this.pendingMotionCount = ""
+        this.lastVisualRange = null
         if (this.statusBarMounted) {
             try { this.statusBar.setMode("reader") } catch { }
         }
@@ -1657,10 +1653,12 @@ export class ReaderView {
             this.clearAllSelectionHighlights()
             this.visualMode = false
             this.selectionAnchor = null
+            this.lastVisualRange = null
             showToast(this.renderer, "✎ Visual off — single char cursor", "info")
         } else {
             this.visualMode = true
             this.selectionAnchor = { paraIdx: this.selectParaIdx, charIdx: this.selectCharIdx }
+            this.lastVisualRange = null
             showToast(this.renderer, "✎ VISUAL — move to extend selection · m mark · d dict · Esc cancel", "info")
         }
         this.renderSelection()
@@ -1819,10 +1817,20 @@ export class ReaderView {
         if (!chapter) return
 
         if (this.visualMode && this.selectionAnchor) {
-            // Visual mode: highlight full range between anchor and cursor
-            this.clearAllSelectionHighlights()
+            // Visual mode: highlight full range between anchor and cursor.
+            // Incremental re-render: only restore paragraphs that just left the
+            // previous selection span, instead of rebuilding the whole chapter
+            // (and re-querying highlights for every paragraph) on each move.
             const { sp, sc, ep, ec } = this.getSelectionRange()
             const liveColor = this.getHighlightBgColor(this.highlightColor, th)
+
+            if (this.lastVisualRange) {
+                const lo = Math.min(this.lastVisualRange.sp, this.lastVisualRange.ep)
+                const hi = Math.max(this.lastVisualRange.sp, this.lastVisualRange.ep)
+                for (let i = lo; i <= hi; i++) {
+                    if (i < sp || i > ep) this.restoreParagraph(i)
+                }
+            }
 
             for (let pi = sp; pi <= ep; pi++) {
                 const text = this.getParaText(pi)
@@ -1842,6 +1850,7 @@ export class ReaderView {
 
                 this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix, liveColor)
             }
+            this.lastVisualRange = { sp, ep }
         } else {
             // Select mode: single char cursor
             const text = this.getParaText(this.selectParaIdx)
@@ -1861,16 +1870,32 @@ export class ReaderView {
             this.applyHighlightToNode(node, para, th, prefix, highlighted, suffix, liveColor)
         }
 
-        // Only scroll if the cursor paragraph is outside the visible viewport
-        const charsPerLine = this.getEstimatedCharsPerLine()
-        const cursorLine = this.getParagraphTopLine(this.selectParaIdx) + Math.floor(this.selectCharIdx / charsPerLine)
-        const viewportTop = this.readingPane.scrollTop
-        const viewportHeight = this.readingPane.viewport?.height || 30
-        const viewportBottom = viewportTop + viewportHeight
-
-        if (cursorLine < viewportTop + 2 || cursorLine > viewportBottom - 3) {
-            // Cursor is outside visible area — scroll to center it
-            this.readingPane.scrollTo(Math.max(0, cursorLine - Math.floor(viewportHeight / 2)))
+        // Keep the cursor's line on-screen. Uses real layout coordinates
+        // (node.y / node.height vs scrollTop) in the same convention as the
+        // minimap — NOT the old hand-rolled line estimates, which ignored
+        // word-wrap slack and cumulatively drifted below the real node.y.
+        // That drift made getParagraphTopLine flip-flop between the estimate
+        // and the real y, so scrollTo() jumped up then back down on every
+        // keypress — scrolling the cursor off-screen (invisible) and causing
+        // the up/down flicker. Minimal-scroll (no re-centering) + a no-op when
+        // the cursor is already visible keeps movement stable.
+        const node = this.paraNodes[this.selectParaIdx]
+        if (node && typeof node.y === "number" && node.y >= 0 && Number.isFinite(node.y)
+            && typeof node.height === "number" && node.height > 0) {
+            const viewportTop = this.readingPane.scrollTop
+            const viewportHeight = this.readingPane.viewport?.height || 30
+            const viewportBottom = viewportTop + viewportHeight
+            // Approximate the cursor's line within its paragraph. This local
+            // estimate does NOT accumulate across paragraphs, so any error stays
+            // bounded to a few lines — far safer than the old cumulative drift.
+            const charsPerLine = Math.max(1, this.getEstimatedCharsPerLine())
+            const cursorLineInPara = Math.floor(this.selectCharIdx / charsPerLine)
+            const cursorY = node.y + cursorLineInPara
+            if (cursorY < viewportTop + 1) {
+                this.readingPane.scrollTo(Math.max(0, cursorY))
+            } else if (cursorY > viewportBottom - 2) {
+                this.readingPane.scrollTo(Math.max(0, cursorY - viewportHeight + 2))
+            }
         }
     }
 
@@ -1903,26 +1928,37 @@ export class ReaderView {
         }
     }
 
-    private applyHighlightsToText(text: string, paraIdx: number, highlights: any[], th: any, baseFgColor?: string): string {
-        if (!text) return text
+    /**
+     * Compute highlight segments for a paragraph's text.
+     * Returns { text, color }[] where `color` is the highlight bg hex (or null
+     * for non-highlighted runs). Consecutive chars sharing the same highlight
+     * color are grouped into one segment.
+     */
+    private computeHighlightSegments(
+        text: string,
+        paraIdx: number,
+        highlights: HighlightRecord[],
+        th: any,
+    ): { text: string; color: string | null }[] {
+        if (!text) return []
         const intersecting = highlights.filter(hl => {
             const ep = hl.end_paragraph_index ?? hl.paragraph_index
             return paraIdx >= hl.paragraph_index && paraIdx <= ep
         })
-        if (intersecting.length === 0) return text
+        if (intersecting.length === 0) return [{ text, color: null }]
 
-        const charColors = new Array(text.length).fill(null)
+        const charColors: (string | null)[] = new Array(text.length).fill(null)
 
         for (const hl of intersecting) {
             const sp = hl.paragraph_index
             const ep = hl.end_paragraph_index ?? hl.paragraph_index
-            
+
             let startChar = 0
             let endChar = text.length - 1
 
             if (paraIdx === sp) startChar = Math.max(0, hl.start_char ?? 0)
             if (paraIdx === ep) endChar = Math.min(text.length - 1, hl.end_char ?? (text.length - 1))
-            
+
             // Backwards compatibility for old highlights (-1 offset)
             if (hl.start_char === -1 && hl.text) {
                 const parts = hl.text.split("\n")
@@ -1940,52 +1976,46 @@ export class ReaderView {
             const color = hl.note ? th.accent.orange : (this.getHighlightBgColor(hl.color, th) || th.accent.amber)
 
             for (let i = startChar; i <= endChar; i++) {
-                if (i >= 0 && i < text.length) {
-                    charColors[i] = color
-                }
+                if (i >= 0 && i < text.length) charColors[i] = color
             }
         }
 
-        let result = ""
-        let currentChunk = ""
-        let currentColor = charColors[0]
-
-        const hexToRgb = (hex: string) => {
-            if (!hex || hex.length < 7) return "0;0;0"
-            const r = parseInt(hex.slice(1, 3), 16)
-            const g = parseInt(hex.slice(3, 5), 16)
-            const b = parseInt(hex.slice(5, 7), 16)
-            return `${r};${g};${b}`
+        const segments: { text: string; color: string | null }[] = []
+        let i = 0
+        while (i < text.length) {
+            const cur = charColors[i] ?? null
+            let j = i
+            while (j < text.length && (charColors[j] ?? null) === cur) j++
+            segments.push({ text: text.slice(i, j), color: cur })
+            i = j
         }
+        return segments
+    }
 
-        const flushChunk = () => {
-            if (!currentChunk) return
-            if (currentColor) {
-                const bgCode = `\x1b[48;2;${hexToRgb(currentColor)}m`
-                const fgCode = `\x1b[38;2;${hexToRgb(th.bg.void)}m`
-                const resetBg = `\x1b[49m`
-                const resetFg = baseFgColor ? `\x1b[38;2;${hexToRgb(baseFgColor)}m` : `\x1b[39m`
-                result += `${bgCode}${fgCode}${currentChunk}${resetFg}${resetBg}`
+    /**
+     * Build styled TextChunks for a paragraph's text, applying per-segment
+     * highlighting via structured StyledText (NOT raw ANSI — OpenTUI's text
+     * renderables do not parse inline ANSI escapes, so escape digits would
+     * leak as visible text). Non-highlighted runs get `stylePlain`; highlighted
+     * runs get a bold bg + fg(void) treatment for contrast.
+     */
+    private buildHighlightedChunks(
+        para: any,
+        paraIdx: number,
+        highlights: HighlightRecord[],
+        th: any,
+        stylePlain: (text: string) => TextChunk,
+    ): TextChunk[] {
+        const segments = this.computeHighlightSegments(para.text || "", paraIdx, highlights, th)
+        const chunks: TextChunk[] = []
+        for (const seg of segments) {
+            if (seg.color) {
+                chunks.push(bold(bg(seg.color)(fg(th.bg.void)(seg.text))))
             } else {
-                result += currentChunk
-            }
-            currentChunk = ""
-        }
-
-        for (let i = 0; i < text.length; i++) {
-            if (charColors[i] !== currentColor || text[i] === '\n') {
-                flushChunk()
-                currentColor = charColors[i]
-            }
-            currentChunk += text[i]
-            if (text[i] === '\n') {
-                flushChunk()
-                currentColor = charColors[i + 1] ?? null
+                chunks.push(stylePlain(seg.text))
             }
         }
-        flushChunk()
-
-        return result
+        return chunks
     }
 
     private clearAllSelectionHighlights() {
@@ -2016,22 +2046,6 @@ export class ReaderView {
         return this.getHighlightBgColor(color, th)
     }
 
-    private hexToAnsiBg(hex: string) {
-        if (!hex || hex.length < 7) return ""
-        const r = parseInt(hex.slice(1, 3), 16)
-        const g = parseInt(hex.slice(3, 5), 16)
-        const b = parseInt(hex.slice(5, 7), 16)
-        return `\x1b[48;2;${r};${g};${b}m`
-    }
-
-    private hexToAnsiFg(hex: string) {
-        if (!hex || hex.length < 7) return ""
-        const r = parseInt(hex.slice(1, 3), 16)
-        const g = parseInt(hex.slice(3, 5), 16)
-        const b = parseInt(hex.slice(5, 7), 16)
-        return `\x1b[38;2;${r};${g};${b}m`
-    }
-
     private restoreParagraph(paraIdx: number) {
         const th = getTheme()
         const chapter = this.parsedBook.chapters[this.currentChapter]
@@ -2043,23 +2057,32 @@ export class ReaderView {
         if (!node) return
 
         const highlights = getChapterHighlights(this.book.id, this.currentChapter)
-        let baseFg = th.text.body
-        if (para.type === "quote" || para.type === "footnote") baseFg = th.text.muted
-
-        const styledText = this.applyHighlightsToText(para.text || "", paraIdx, highlights, th, baseFg)
+        const plainChunk = (s: string): TextChunk => ({ __isChunk: true, text: s } as TextChunk)
 
         switch (para.type) {
-            case "heading":
-                node.content = t`\n\n${bold(fg(
+            case "heading": {
+                const levelColor =
                     para.level === 1 ? th.accent.purple :
                         para.level === 2 ? th.accent.blue :
                             para.level === 3 ? th.accent.cyan :
                                 th.accent.green
-                )(styledText))}\n`
+                const chunks = this.buildHighlightedChunks(para, paraIdx, highlights, th,
+                    (s) => bold(fg(levelColor)(s)))
+                node.content = new StyledText([plainChunk("\n\n"), ...chunks, plainChunk("\n")])
                 break
-            case "quote":
-                node.content = t`\n  ${fg(th.accent.cyan)("│")} ${italic(fg(th.text.muted)(styledText))}\n`
+            }
+            case "quote": {
+                const chunks = this.buildHighlightedChunks(para, paraIdx, highlights, th,
+                    (s) => italic(fg(th.text.muted)(s)))
+                node.content = new StyledText([
+                    plainChunk("\n  "),
+                    fg(th.accent.cyan)("│"),
+                    plainChunk(" "),
+                    ...chunks,
+                    plainChunk("\n"),
+                ])
                 break
+            }
             case "list-item": {
                 const indent = "  ".repeat((para.indent || 0) + 1)
                 let bullet: string
@@ -2069,22 +2092,30 @@ export class ReaderView {
                     const bullets = ["•", "◦", "▪", "▸"]
                     bullet = bullets[Math.min(para.indent || 0, bullets.length - 1)]!
                 }
-                node.content = t`${indent}${fg(th.accent.cyan)(bullet)} ${fg(th.text.body)(styledText)}`
+                const chunks = this.buildHighlightedChunks(para, paraIdx, highlights, th,
+                    (s) => fg(th.text.body)(s))
+                node.content = new StyledText([
+                    plainChunk(indent),
+                    fg(th.accent.cyan)(bullet),
+                    plainChunk(" "),
+                    ...chunks,
+                ])
                 break
             }
             case "code": {
+                const plainText = para.text || ""
                 if (this.collapsedCodeBlocks.has(paraIdx)) {
-                    const lines = styledText.split("\n")
-                    const preview = lines.length > 2 ? lines.slice(0, 2).join("\n") + "\n..." : styledText
+                    const lines = plainText.split("\n")
+                    const preview = lines.length > 2 ? lines.slice(0, 2).join("\n") + "\n..." : plainText
                     node.content = this.formatCodeBlock(preview, (para.language || "code") + " (Collapsed)")
                 } else {
-                    node.content = this.formatCodeBlock(styledText, para.language)
+                    node.content = this.formatCodeBlock(plainText, para.language)
                 }
                 node.fg = th.text.body
                 break
             }
             case "table": {
-                const tableText = para.tableRows ? formatTable(para.tableRows) : styledText
+                const tableText = para.tableRows ? formatTable(para.tableRows) : (para.text || "")
                 node.content = `\n${tableText}\n`
                 node.fg = th.text.body
                 break
@@ -2095,17 +2126,41 @@ export class ReaderView {
                 const colors: Record<string, string> = { tip: th.accent.green, warning: th.accent.amber, note: th.accent.cyan, important: th.accent.pink }
                 const icon = icons[kind] || "📝"
                 const color = colors[kind] || th.accent.cyan
-                node.content = t`\n  ${fg(color)("┃")} ${icon} ${bold(fg(color)(kind.toUpperCase()))}\n  ${fg(color)("┃")} ${fg(th.text.body)(styledText)}\n`
+                const chunks = this.buildHighlightedChunks(para, paraIdx, highlights, th,
+                    (s) => fg(th.text.body)(s))
+                node.content = new StyledText([
+                    plainChunk("\n  "),
+                    fg(color)("┃"),
+                    plainChunk(" "),
+                    plainChunk(icon),
+                    plainChunk(" "),
+                    bold(fg(color)(kind.toUpperCase())),
+                    plainChunk("\n  "),
+                    fg(color)("┃"),
+                    plainChunk(" "),
+                    ...chunks,
+                    plainChunk("\n"),
+                ])
                 break
             }
             case "footnote": {
                 const ref = para.footnoteRef ? `[${para.footnoteRef}]` : ""
-                node.content = t`\n  ${fg(th.accent.cyan)("─")} ${fg(th.text.subtle)(`📎 ${ref}`)} ${italic(fg(th.text.muted)(styledText))}\n`
+                const chunks = this.buildHighlightedChunks(para, paraIdx, highlights, th,
+                    (s) => italic(fg(th.text.muted)(s)))
+                node.content = new StyledText([
+                    plainChunk("\n  "),
+                    fg(th.accent.cyan)("─"),
+                    plainChunk(" "),
+                    fg(th.text.subtle)(`📎 ${ref}`),
+                    plainChunk(" "),
+                    ...chunks,
+                    plainChunk("\n"),
+                ])
                 break
             }
             case "image": {
                 const src = para.imageSrc || ""
-                const alt = para.imageAlt || styledText || "[Image]"
+                const alt = para.imageAlt || para.text || "[Image]"
                 const imageData = this.resolveImage(src)
 
                 if (imageData && supportsImages()) {
@@ -2118,14 +2173,28 @@ export class ReaderView {
                     }
                     node.content = content
                 } else {
-                    const caption = alt !== "[Image]" ? alt : styledText || "Image"
+                    const caption = alt !== "[Image]" ? alt : (para.text || "Image")
                     node.content = t`\n  ${fg(th.accent.cyan)("┌─────────────────────────────────┐")}\n  ${fg(th.accent.cyan)("│")}  ${fg(th.text.muted)("🖼️  ")}${fg(th.text.body)(caption.slice(0, 28).padEnd(28))} ${fg(th.accent.cyan)("│")}\n  ${fg(th.accent.cyan)("└─────────────────────────────────┘")}\n`
                 }
                 break
             }
             default: {
-                const content = formatInlineRichText(styledText)
-                node.content = content ? `\n${content}\n` : ""
+                // Apply inline rich formatting (`code`/bold/italic) to non-highlighted
+                // segments; highlighted segments get a clean bg via structured chunks.
+                const segments = this.computeHighlightSegments(para.text || "", paraIdx, highlights, th)
+                const chunks: TextChunk[] = []
+                for (const seg of segments) {
+                    if (seg.color) {
+                        chunks.push(bold(bg(seg.color)(fg(th.bg.void)(seg.text))))
+                    } else {
+                        chunks.push(...formatInlineRichText(seg.text).chunks)
+                    }
+                }
+                if (chunks.length === 0) {
+                    node.content = ""
+                } else {
+                    node.content = new StyledText([plainChunk("\n"), ...chunks, plainChunk("\n")])
+                }
                 node.fg = th.text.body
                 break
             }
