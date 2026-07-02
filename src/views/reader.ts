@@ -1530,7 +1530,10 @@ export class ReaderView {
 
         const viewportTop = this.readingPane.scrollTop
         const viewportHeight = this.readingPane.viewport?.height || 30
-        const targetLine = viewportTop + Math.floor(viewportHeight / 3)
+        // Target the vertical CENTER of the viewport — that's where the reader's
+        // eyes typically are. (Previously top-third, which landed the cursor
+        // above the user's reading position.)
+        const targetLine = viewportTop + Math.floor(viewportHeight / 2)
 
         let bestIdx = -1
         let bestDistance = Number.POSITIVE_INFINITY
@@ -1566,6 +1569,28 @@ export class ReaderView {
         return bestIdx
     }
 
+    /**
+     * Compute the char index within a paragraph whose wrapped line is closest
+     * to a given content-absolute `targetLine`. Used to drop the select-mode
+     * cursor on the line the reader is actually looking at (viewport center)
+     * rather than always at the paragraph start (char 0), which could be
+     * off-screen for tall paragraphs and trigger a view jump.
+     */
+    private getCharIdxForLine(paraIdx: number, targetLine: number): number {
+        const text = this.getParaText(paraIdx)
+        if (!text) return 0
+        const node = this.paraNodes[paraIdx]
+        if (!node || typeof node.y !== "number" || !Number.isFinite(node.y)
+            || typeof node.height !== "number" || node.height <= 0) return 0
+        const lineInPara = Math.max(0, targetLine - node.y)
+        const charsPerLine = Math.max(1, this.getEstimatedCharsPerLine())
+        // Walk to the start of the target wrapped line (skip leading whitespace
+        // so the cursor sits on real text).
+        let idx = Math.min(text.length - 1, lineInPara * charsPerLine)
+        while (idx < text.length - 1 && /\s/.test(text[idx] || "")) idx++
+        return idx
+    }
+
     private enterSelectMode() {
         const chapter = this.parsedBook.chapters[this.currentChapter]
         if (!chapter || chapter.paragraphs.length === 0) return
@@ -1588,7 +1613,14 @@ export class ReaderView {
             return
         }
         this.selectParaIdx = nearest
-        this.selectCharIdx = 0
+        // Drop the cursor on the line the reader is actually looking at
+        // (viewport center), not the paragraph start — so it lands in-view
+        // without scrolling, even for tall paragraphs whose start is above
+        // the viewport.
+        const viewportTop = this.readingPane.scrollTop
+        const viewportHeight = this.readingPane.viewport?.height || 30
+        const centerLine = viewportTop + Math.floor(viewportHeight / 2)
+        this.selectCharIdx = this.getCharIdxForLine(nearest, centerLine)
 
         if (this.statusBarMounted) {
             try { this.statusBar.setMode("select") } catch { }
