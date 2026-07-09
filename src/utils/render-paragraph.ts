@@ -6,9 +6,9 @@
 import type { CliRenderer } from "@opentui/core"
 import { TextRenderable, StyledText, type TextChunk, t, bold, italic, fg, bg } from "@opentui/core"
 import type { ThemeColors } from "./theme"
-import { formatInlineRichText, getTheme } from "./theme"
+import { formatInlineRichText, formatInlineCode, getTheme } from "./theme"
 import { formatTable } from "./html-to-text"
-import type { StyledParagraph } from "./html-to-text"
+import type { StyledParagraph, InlineSpan } from "./html-to-text"
 
 export interface RenderedNode {
     node: TextRenderable
@@ -25,6 +25,31 @@ function stripInlineMarkers(text: string): string {
         .replace(/\*\*\*([^*]+)\*\*\*/g, "$1")
         .replace(/\*\*([^*]+)\*\*/g, "$1")
         .replace(/\*([^*\n]+)\*/g, "$1")
+}
+
+/**
+ * Build rich content chunks from inlineSpans for paragraph/list-item rendering.
+ */
+function buildRichContent(para: StyledParagraph, th: ThemeColors): TextChunk[] {
+    const spans = para.inlineSpans
+    if (!spans || spans.length === 0) return []
+
+    const chunks: TextChunk[] = []
+    for (const span of spans) {
+        let text = span.text
+        if (span.code) {
+            chunks.push(bg(th.inlineCode.bg)(fg(th.inlineCode.fg)(` ${text} `)))
+        } else if (span.bold && span.italic) {
+            chunks.push(bold(italic(fg(th.text.body)(text))))
+        } else if (span.bold) {
+            chunks.push(bold(fg(th.text.body)(text)))
+        } else if (span.italic) {
+            chunks.push(italic(fg(th.text.body)(text)))
+        } else {
+            chunks.push({ __isChunk: true, text: fg(th.text.body)(text) } as any)
+        }
+    }
+    return chunks
 }
 
 /**
@@ -82,6 +107,15 @@ export function renderParagraph(
             } else {
                 const bullets = ["•", "◦", "▪", "▸"]
                 bullet = bullets[Math.min(para.indent || 0, bullets.length - 1)]!
+            }
+            if (para.inlineSpans && para.inlineSpans.length > 0) {
+                const prefix = `${indent}${fg(th.accent.cyan)(bullet)} `
+                const richChunks = buildRichContent(para, th)
+                return new TextRenderable(renderer, {
+                    id: `para-${index}`,
+                    ...textProps,
+                    content: new StyledText([{ __isChunk: true, text: prefix } as TextChunk, ...richChunks]),
+                })
             }
             const cleanText = stripInlineMarkers(para.text)
             return new TextRenderable(renderer, {
@@ -150,6 +184,17 @@ export function renderParagraph(
         }
 
         default: {
+            if (para.inlineSpans && para.inlineSpans.length > 0) {
+                const richChunks = buildRichContent(para, th)
+                if (richChunks.length > 0) {
+                    const nl = (s: string): TextChunk => ({ __isChunk: true, text: s } as TextChunk)
+                    return new TextRenderable(renderer, {
+                        id: `para-${index}`,
+                        ...textProps,
+                        content: new StyledText([nl("\n"), ...richChunks, nl("\n")]),
+                    })
+                }
+            }
             const raw = para.text || ""
             const rich = formatInlineRichText(raw)
             if (rich.chunks.length > 0) {

@@ -8,6 +8,7 @@ import { createHash } from "crypto"
 import { writeFileSync, existsSync, mkdirSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
+import { loadConfig } from "./config"
 
 export interface BookMetadata {
     title: string
@@ -92,6 +93,20 @@ export async function parseEpub(filePath: string): Promise<ParsedBook> {
         } catch (err) {
             // Skip chapters that fail to parse
             continue
+        }
+    }
+
+    // TOC-aware chapter ordering: detect and fix malformed spine order (Task 2)
+    const tocOrder = buildTocOrderMap(epub)
+    if (tocOrder.size >= chapters.length * 0.7 && chapters.length > 1) {
+        const mismatches = countOrderMismatches(chapters, tocOrder)
+        if (mismatches > 2) {
+            chapters.sort((a, b) => {
+                const aPos = tocOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER
+                const bPos = tocOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER
+                return aPos - bPos
+            })
+            chapters.forEach((ch, idx) => { ch.order = idx })
         }
     }
 
@@ -221,6 +236,40 @@ function buildTocLookup(epub: any): { byId: Map<string, string>; byHref: Map<str
     return { byId, byHref, byBaseName }
 }
 
+/**
+ * Build a TOC order map for reordering chapters when spine order is malformed.
+ * Maps chapter ID → position in the EPUB table of contents.
+ */
+function buildTocOrderMap(epub: any): Map<string, number> {
+    const orderMap = new Map<string, number>()
+    const flatToc = flattenToc(epub.toc || [])
+    let position = 0
+
+    for (const entry of flatToc) {
+        const id = (entry?.id || "").trim()
+        const href = normalizeHref(entry?.href)
+        if (id) orderMap.set(id, position)
+        position++
+    }
+    return orderMap
+}
+
+/**
+ * Count how many chapters are out of TOC order.
+ * Returns N where N adjacent pairs are out of order.
+ */
+function countOrderMismatches(chapters: Chapter[], tocOrder: Map<string, number>): number {
+    let mismatches = 0
+    for (let i = 1; i < chapters.length; i++) {
+        const prevPos = tocOrder.get(chapters[i - 1]!.id) ?? -1
+        const curPos = tocOrder.get(chapters[i]!.id) ?? -1
+        if (prevPos >= 0 && curPos >= 0 && curPos < prevPos) {
+            mismatches++
+        }
+    }
+    return mismatches
+}
+
 function deriveChapterTitleFromParagraphs(paragraphs: StyledParagraph[]): string | null {
     for (const p of paragraphs) {
         if (p.type === "heading" && p.text?.trim()) {
@@ -231,6 +280,9 @@ function deriveChapterTitleFromParagraphs(paragraphs: StyledParagraph[]): string
 }
 
 function isLikelyBoilerplateSection(title: string, paragraphs: StyledParagraph[], wordCount: number): boolean {
+    const config = loadConfig()
+    if ((config as any).epub?.showFrontMatter) return false
+
     const normalizedTitle = (title || "").toLowerCase().trim()
     const joined = paragraphs.map(p => p.text || "").join(" ").toLowerCase()
 

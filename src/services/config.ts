@@ -35,6 +35,10 @@ export interface TBookConfig {
         showPageSeparators: boolean // show page boundary markers
         pdfPassword: string       // password for encrypted PDFs
     }
+    // EPUB-specific options
+    epub: {
+        showFrontMatter: boolean  // show title page/copyright/TOC sections (default false)
+    }
 }
 
 const CONFIG_PATH = join(homedir(), ".tbook", "config.json")
@@ -68,6 +72,9 @@ const DEFAULT_CONFIG: TBookConfig = {
         showFrontMatter: false,
         showPageSeparators: false,
         pdfPassword: "",
+    },
+    epub: {
+        showFrontMatter: false,
     },
 }
 

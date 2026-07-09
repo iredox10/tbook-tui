@@ -32,7 +32,7 @@ Improve EPUB parsing/rendering fidelity for semantics, inline styling, and image
 
 ## Next pass (recommended)
 
-- [ ] Replace plain inline markers with tokenized inline spans for truly lossless nested formatting.
-- [ ] Add TOC-aware chapter ordering fallback when malformed spine order appears.
-- [ ] Add optional "show front matter" toggle (currently some front-matter is filtered heuristically).
-- [ ] Add regression fixtures (`.epub`) + snapshot tests for parser output.
+- [x] Replace plain inline markers with tokenized inline spans for truly lossless nested formatting.
+- [x] Add TOC-aware chapter ordering fallback when malformed spine order appears.
+- [x] Add optional "show front matter" toggle (currently some front-matter is filtered heuristically).
+- [x] Add regression fixtures (`.epub`) + snapshot tests for parser output.

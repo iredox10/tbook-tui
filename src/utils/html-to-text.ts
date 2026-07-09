@@ -19,6 +19,15 @@ export interface StyledParagraph {
     footnoteRef?: string // footnote reference ID
     imageSrc?: string // image source path/URL
     imageAlt?: string // image alt text
+    inlineSpans?: InlineSpan[] // tokenized inline formatting (bold, italic, code, links)
+}
+
+export interface InlineSpan {
+    text: string
+    bold?: boolean
+    italic?: boolean
+    code?: boolean
+    link?: string
 }
 
 function getSemanticTokens(node: any): string[] {
@@ -253,14 +262,15 @@ export function htmlToStyledParagraphs(html: string): StyledParagraph[] {
                 const childTag = (child.tagName || "").toLowerCase()
                 if (childTag === "li") {
                     itemIndex++
-                    const text = cleanTextWithInlineCode(child)
-                    if (text) {
+                    const result = cleanTextWithInlineSpans(child)
+                    if (result.text) {
                         paragraphs.push({
                             type: "list-item",
-                            text,
+                            text: result.text,
                             indent: depth,
                             ordered: true,
                             index: itemIndex,
+                            inlineSpans: result.spans,
                         })
                     }
                     // Handle nested lists inside <li>
@@ -280,13 +290,14 @@ export function htmlToStyledParagraphs(html: string): StyledParagraph[] {
             for (const child of node.childNodes) {
                 const childTag = (child.tagName || "").toLowerCase()
                 if (childTag === "li") {
-                    const text = cleanTextWithInlineCode(child)
-                    if (text) {
+                    const result = cleanTextWithInlineSpans(child)
+                    if (result.text) {
                         paragraphs.push({
                             type: "list-item",
-                            text,
+                            text: result.text,
                             indent: depth,
                             ordered: false,
+                            inlineSpans: result.spans,
                         })
                     }
                     // Handle nested lists inside <li>
@@ -358,9 +369,9 @@ export function htmlToStyledParagraphs(html: string): StyledParagraph[] {
         // ── Leaf-level text blocks — extract text directly ──
         const leafTags = ["p", "dd", "dt", "td", "th", "figcaption", "caption", "address"]
         if (leafTags.includes(tag)) {
-            const text = cleanTextWithInlineCode(node)
-            if (text) {
-                paragraphs.push({ type: "paragraph", text })
+            const result = cleanTextWithInlineSpans(node)
+            if (result.text) {
+                paragraphs.push({ type: "paragraph", text: result.text, inlineSpans: result.spans })
             }
             return
         }
@@ -404,104 +415,87 @@ export function htmlToStyledParagraphs(html: string): StyledParagraph[] {
 }
 
 /**
- * Extract text from a node while preserving inline <code> markers.
- * Inline code is surrounded by ` backtick markers for rendering.
+ * Extract text from a node while preserving inline formatting as tokenized spans.
+ * Returns both plain text (for search/indexing) and structured spans (for rich rendering).
+ * Supports nested bold, italic, code, and links without marker loss.
  */
-function cleanTextWithInlineCode(node: any): string {
-    const parts: string[] = []
+export function cleanTextWithInlineSpans(node: any): { text: string; spans: InlineSpan[] } {
+    const spans: InlineSpan[] = []
 
-    function walk(n: any) {
+    function walk(n: any, bold: boolean, italic: boolean, code: boolean, link: string | null) {
         if (n.nodeType === 3) {
-            // Text node
-            parts.push(n.rawText || n.textContent || "")
+            const text = (n.rawText || n.textContent || "")
+            if (text) {
+                spans.push({ text, bold: bold || undefined, italic: italic || undefined, code: code || undefined, link: link || undefined })
+            }
             return
         }
         const tag = (n.tagName || "").toLowerCase()
 
-        // Inline code: wrap in backticks for terminal styling
-        if (tag === "code" || tag === "samp" || tag === "var") {
-            const text = n.textContent?.trim()
-            if (text) {
-                parts.push(`\`${text}\``)
-                return
-            }
-        }
-
-        // <kbd> for keyboard shortcuts
-        if (tag === "kbd") {
-            const text = n.textContent?.trim()
-            if (text) {
-                parts.push(`[${text}]`)
-                return
-            }
-        }
-
-        // <strong> / <b> markup — preserve emphasis markers
         if (tag === "strong" || tag === "b") {
-            const text = cleanText(n.textContent || "")
-            if (text) parts.push(`**${text}**`)
+            for (const child of n.childNodes || []) walk(child, true, italic, code, link)
             return
         }
-
-        // <em> / <i> markup — preserve emphasis markers
         if (tag === "em" || tag === "i") {
-            const text = cleanText(n.textContent || "")
-            if (text) parts.push(`*${text}*`)
+            for (const child of n.childNodes || []) walk(child, bold, true, code, link)
             return
         }
-
-        // <a> links — include text and preserve noteref links
+        if (tag === "code" || tag === "samp" || tag === "var") {
+            for (const child of n.childNodes || []) walk(child, bold, italic, true, link)
+            return
+        }
         if (tag === "a") {
-            const text = cleanText(n.textContent || "")
             const href = n.getAttribute?.("href") || ""
             if (hasSemantic(n, "noteref", "doc-noteref") || n.getAttribute?.("role") === "doc-noteref") {
-                const ref = href.replace(/^#/, "") || text
+                const ref = href.replace(/^#/, "") || ""
                 if (ref) {
-                    parts.push(`[^${ref}]`)
+                    spans.push({ text: `[^${ref}]`, bold: bold || undefined })
                     return
                 }
             }
-            if (text) {
-                parts.push(text)
-                return
-            }
-        }
-
-        // Skip scripts, styles
-        if (tag === "script" || tag === "style") return
-
-        // Handle inline images — push a text representation
-        if (tag === "img" || tag === "image") {
-            const alt = n.getAttribute?.("alt") || ""
-            if (alt) parts.push(`[${alt}]`)
-            else parts.push("[Image]")
+            for (const child of n.childNodes || []) walk(child, bold, italic, code, href || null)
             return
         }
-
-        // ── Footnote references (superscript links) ──
-        if (tag === "sup" || (tag === "a" &&
-            (hasSemantic(n, "noteref", "doc-noteref") || n.getAttribute?.("role") === "doc-noteref"))) {
-            const href = n.getAttribute?.("href") || ""
-            if (href.includes("note") || href.includes("fn") || href.includes("footnote") ||
-                hasSemantic(n, "noteref", "doc-noteref")) {
-                const ref = href.replace(/^#/, "")
-                const text = n.textContent?.trim() || ""
-                const marker = ref || text
-                if (marker) {
-                    parts.push(`[^${marker}]`)
-                    return
-                }
-            }
+        if (tag === "kbd") {
+            const text = n.textContent?.trim() || ""
+            if (text) spans.push({ text: `[${text}]` })
+            return
         }
+        if (tag === "img" || tag === "image") {
+            const alt = n.getAttribute?.("alt") || "[Image]"
+            spans.push({ text: `[${alt}]` })
+            return
+        }
+        if (tag === "sup") {
+            for (const child of n.childNodes || []) walk(child, bold, italic, code, link)
+            return
+        }
+        if (tag === "script" || tag === "style") return
 
-        // Recurse
-        for (const child of n.childNodes || []) {
-            walk(child)
+        for (const child of n.childNodes || []) walk(child, bold, italic, code, link)
+    }
+
+    walk(node, false, false, false, null)
+
+    // Merge adjacent spans with identical styling
+    const merged: InlineSpan[] = []
+    for (const s of spans) {
+        if (s.text === "") continue
+        const prev = merged[merged.length - 1]
+        if (prev &&
+            prev.bold === s.bold &&
+            prev.italic === s.italic &&
+            prev.code === s.code &&
+            prev.link === s.link) {
+            prev.text += s.text
+        } else {
+            merged.push({ ...s })
         }
     }
 
-    walk(node)
-    return cleanText(parts.join(""))
+    const plainText = cleanText(merged.map(s => s.text).join(""))
+
+    return { text: plainText, spans: merged.length > 0 ? merged : undefined as any }
 }
 
 /**
