@@ -103,7 +103,7 @@ bun add -g iredox-tbook-tui
 tbook-tui
 ```
 
-For PDF support, install `poppler-utils`:
+For PDF support, install `poppler-utils` (provides `pdftohtml` and `pdfinfo`):
 ```bash
 # Ubuntu/Debian
 sudo apt install poppler-utils
@@ -111,6 +111,31 @@ sudo apt install poppler-utils
 # macOS
 brew install poppler
 ```
+
+**PDF capabilities:**
+- Outline-based chapter navigation (uses PDF bookmarks when available)
+- Font-aware text extraction with merged same-baseline runs
+- Inline emphasis (bold, italic, links) detection from font data
+- Image extraction and rendering (when terminal supports images)
+- Cover detection from first-page images
+- Content profile detection (programming vs narrative) to reduce false code blocks
+- Multi-column layout awareness
+- Scanned PDF detection with optional OCR support
+
+For scanned PDFs (image-only, no text layer), install OCR support:
+```bash
+# Ubuntu/Debian
+sudo apt install tesseract-ocr
+
+# macOS
+brew install tesseract
+```
+
+**Current PDF limitations:**
+- Multi-column layout ordering is best-effort; complex layouts may read out of order
+- DRM-protected PDFs are not supported
+- RTL / non-Latin scripts may have degraded results depending on font embedding
+- OCR requires separate `tesseract-ocr` installation
 
 ## 🎮 Controls
 
@@ -214,7 +239,7 @@ src/
 ├── services/
 │   ├── database.ts         # SQLite via bun:sqlite
 │   ├── epub-parser.ts      # EPUB → structured chapters
-│   ├── pdf-parser.ts       # PDF → chapters via pdftotext
+│   ├── pdf-parser.ts       # PDF → chapters via pdftohtml -xml (with outline, images, fontspec)
 │   ├── export.ts           # Obsidian/Logseq markdown export
 │   ├── config.ts           # User config persistence
 │   └── dictionary.ts       # Free dictionary API client

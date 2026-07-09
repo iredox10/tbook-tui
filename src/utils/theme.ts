@@ -174,7 +174,10 @@ export function formatInlineRichText(text: string): StyledText {
 
   for (const c of chunks) {
     if (!c.fg && !c.bg) {
-      c.text = c.text.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\*([^*\n]+)\*/g, "$1")
+      c.text = c.text
+        .replace(/\*\*\*([^*]+)\*\*\*/g, "$1")
+        .replace(/\*\*([^*]+)\*\*/g, "$1")
+        .replace(/\*([^*\n]+)\*/g, "$1")
     }
   }
 

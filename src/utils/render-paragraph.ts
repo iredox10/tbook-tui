@@ -6,13 +6,25 @@
 import type { CliRenderer } from "@opentui/core"
 import { TextRenderable, StyledText, type TextChunk, t, bold, italic, fg, bg } from "@opentui/core"
 import type { ThemeColors } from "./theme"
-import { formatInlineRichText } from "./theme"
+import { formatInlineRichText, getTheme } from "./theme"
 import { formatTable } from "./html-to-text"
 import type { StyledParagraph } from "./html-to-text"
 
 export interface RenderedNode {
     node: TextRenderable
     paragraphIndex: number
+}
+
+/**
+ * Strip `**`, `*`, and `***` inline emphasis markers from text.
+ * Used for heading, quote, list-item, note, and image text where
+ * raw markers should never be visible.
+ */
+function stripInlineMarkers(text: string): string {
+    return text
+        .replace(/\*\*\*([^*]+)\*\*\*/g, "$1")
+        .replace(/\*\*([^*]+)\*\*/g, "$1")
+        .replace(/\*([^*\n]+)\*/g, "$1")
 }
 
 /**
@@ -37,18 +49,20 @@ export function renderParagraph(
                 : para.level === 2 ? th.accent.blue
                     : para.level === 3 ? th.accent.cyan
                         : th.accent.green
+            const cleanText = stripInlineMarkers(para.text)
             return new TextRenderable(renderer, {
                 id: `para-${index}`,
                 ...textProps,
-                content: t`\n\n${bold(fg(color)(para.text))}\n`,
+                content: t`\n\n${bold(fg(color)(cleanText))}\n`,
             })
         }
 
         case "quote": {
+            const cleanText = stripInlineMarkers(para.text)
             return new TextRenderable(renderer, {
                 id: `para-${index}`,
                 ...textProps,
-                content: t`\n  ${fg(th.accent.cyan)("│")} ${italic(fg(th.text.muted)(para.text))}\n`,
+                content: t`\n  ${fg(th.accent.cyan)("│")} ${italic(fg(th.text.muted)(cleanText))}\n`,
             })
         }
 
@@ -69,10 +83,11 @@ export function renderParagraph(
                 const bullets = ["•", "◦", "▪", "▸"]
                 bullet = bullets[Math.min(para.indent || 0, bullets.length - 1)]!
             }
+            const cleanText = stripInlineMarkers(para.text)
             return new TextRenderable(renderer, {
                 id: `para-${index}`,
                 ...textProps,
-                content: t`${indent}${fg(th.accent.cyan)(bullet)} ${fg(th.text.body)(para.text)}`,
+                content: t`${indent}${fg(th.accent.cyan)(bullet)} ${fg(th.text.body)(cleanText)}`,
             })
         }
 
@@ -106,10 +121,31 @@ export function renderParagraph(
             const kind = para.noteKind || "note"
             const icon = icons[kind] || "📝"
             const color = colors[kind] || th.accent.cyan
+            const cleanText = stripInlineMarkers(para.text)
             return new TextRenderable(renderer, {
                 id: `para-${index}`,
                 ...textProps,
-                content: t`\n  ${fg(color)("┃")} ${icon} ${bold(fg(color)(kind.toUpperCase()))}\n  ${fg(color)("┃")} ${fg(th.text.body)(para.text)}\n`,
+                content: t`\n  ${fg(color)("┃")} ${icon} ${bold(fg(color)(kind.toUpperCase()))}\n  ${fg(color)("┃")} ${fg(th.text.body)(cleanText)}\n`,
+            })
+        }
+
+        case "image": {
+            const alt = para.imageAlt || para.text || "[Image]"
+            const cleanAlt = stripInlineMarkers(alt)
+            return new TextRenderable(renderer, {
+                id: `para-${index}`,
+                ...textProps,
+                content: t`\n  ┌${"─".repeat(36)}┐\n  │  🖼️  ${fg(th.accent.cyan)(cleanAlt)}\n  └${"─".repeat(36)}┘\n`,
+            })
+        }
+
+        case "footnote": {
+            const cleanText = stripInlineMarkers(para.text)
+            const ref = para.footnoteRef ? `[^${para.footnoteRef}]` : ""
+            return new TextRenderable(renderer, {
+                id: `para-${index}`,
+                ...textProps,
+                content: t`\n  ${fg(th.text.muted)(`───────────`)}\n  ${fg(th.accent.cyan)(bold(ref))} ${fg(th.text.muted)(cleanText)}\n`,
             })
         }
 

@@ -29,6 +29,12 @@ export interface TBookConfig {
     }
     // Custom keybinds (key = action, value = key sequence)
     customKeybinds: Record<string, string>
+    // PDF-specific options
+    pdf: {
+        showFrontMatter: boolean  // show preface/TOC/copyright pages (default false)
+        showPageSeparators: boolean // show page boundary markers
+        pdfPassword: string       // password for encrypted PDFs
+    }
 }
 
 const CONFIG_PATH = join(homedir(), ".tbook", "config.json")
@@ -58,6 +64,11 @@ const DEFAULT_CONFIG: TBookConfig = {
         dailyMinutes: 0,
     },
     customKeybinds: {},
+    pdf: {
+        showFrontMatter: false,
+        showPageSeparators: false,
+        pdfPassword: "",
+    },
 }
 
 let cachedConfig: TBookConfig | null = null
