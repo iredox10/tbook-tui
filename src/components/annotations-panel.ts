@@ -10,6 +10,7 @@ import {
 import { theme, truncate } from "../utils/theme"
 import { getHighlights, removeHighlight, type HighlightRecord } from "../services/database"
 import { showToast } from "./toast"
+import { enableTouchScroll, enableTap } from "../utils/touch"
 
 export class AnnotationsPanel {
     private renderer: CliRenderer
@@ -87,6 +88,9 @@ export class AnnotationsPanel {
             },
         })
         this.container.add(this.listBox)
+
+        // Touch: drag-to-scroll the annotations list.
+        enableTouchScroll(this.listBox, { renderer: this.renderer })
 
         // Footer
         this.container.add(new TextRenderable(this.renderer, {
@@ -178,6 +182,17 @@ export class AnnotationsPanel {
             })
             this.listBox.add(node)
             this.listNodes.push(node)
+
+            // Touch: tap an annotation to jump to its source.
+            const idx = i
+            enableTap(node, () => {
+                this.selectedIndex = idx
+                const a = this.annotations[idx]
+                if (a) {
+                    this.hide()
+                    this.onJump(a.chapter, a.paragraph_index)
+                }
+            })
 
             if (ann.note) {
                 const noteNode = new TextRenderable(this.renderer, {

@@ -26,7 +26,7 @@ export function renderParagraph(
 ): TextRenderable {
     const textProps = {
         wrapMode: "word" as const,
-        selectable: true,
+        selectable: false,
         selectionBg: th.accent.blue,
         selectionFg: th.bg.void,
     }

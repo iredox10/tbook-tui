@@ -9,6 +9,7 @@ import {
 } from "@opentui/core"
 import { theme, relativeTime } from "../utils/theme"
 import { getBookmarks, removeBookmark, type BookmarkRecord } from "../services/database"
+import { enableSelectTap, enableTap } from "../utils/touch"
 
 export class BookmarksPanel {
     private renderer: CliRenderer
@@ -36,6 +37,16 @@ export class BookmarksPanel {
         if (this.visible) return
         this.visible = true
         this.bookmarks = getBookmarks(this.bookId)
+
+        // Full-screen backdrop: tap outside the modal to close (touch).
+        const backdrop = new BoxRenderable(this.renderer, {
+            id: "bookmarks-backdrop",
+            position: "absolute",
+            top: 0, bottom: 0, left: 0, right: 0,
+            backgroundColor: "transparent",
+        })
+        enableTap(backdrop, () => this.hide())
+        this.renderer.root.add(backdrop)
 
         this.container = new BoxRenderable(this.renderer, {
             id: "bookmarks-overlay",
@@ -103,6 +114,9 @@ export class BookmarksPanel {
 
             this.container.add(this.select)
             this.select.focus()
+
+            // Touch: tap a bookmark to jump to it.
+            enableSelectTap(this.select)
         }
 
         // Footer
@@ -139,6 +153,7 @@ export class BookmarksPanel {
     hide() {
         if (!this.visible) return
         this.visible = false
+        try { this.renderer.root.remove("bookmarks-backdrop") } catch { }
         try { this.renderer.root.remove(this.container.id) } catch { }
         this.onClose()
     }

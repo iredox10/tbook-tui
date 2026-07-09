@@ -10,6 +10,7 @@ import {
 } from "@opentui/core"
 import { theme } from "../utils/theme"
 import { lookupWord, type DictionaryEntry } from "../services/dictionary"
+import { enableTouchScroll } from "../utils/touch"
 import { addToVocabulary } from "../services/database"
 
 export class DictionaryModal {
@@ -103,6 +104,9 @@ export class DictionaryModal {
             },
         })
         this.container.add(this.resultBox)
+
+        // Touch: drag-to-scroll the definitions.
+        enableTouchScroll(this.resultBox, { renderer: this.renderer })
 
         // Footer
         this.container.add(new TextRenderable(this.renderer, {

@@ -8,6 +8,7 @@ import {
     t, bold, fg,
 } from "@opentui/core"
 import { theme, truncate } from "../utils/theme"
+import { enableSelectTap, enableTap } from "../utils/touch"
 import type { Chapter } from "../services/epub-parser"
 
 export class ChapterTocModal {
@@ -32,6 +33,16 @@ export class ChapterTocModal {
     show(chapters: Chapter[], currentChapter: number, completedChapters: Set<number> = new Set()) {
         if (this.visible) return
         this.visible = true
+
+        // Full-screen backdrop: tap outside the modal to close (touch).
+        const backdrop = new BoxRenderable(this.renderer, {
+            id: "toc-backdrop",
+            position: "absolute",
+            top: 0, bottom: 0, left: 0, right: 0,
+            backgroundColor: "transparent",
+        })
+        enableTap(backdrop, () => this.hide())
+        this.renderer.root.add(backdrop)
 
         this.container = new BoxRenderable(this.renderer, {
             id: "toc-overlay",
@@ -107,6 +118,9 @@ export class ChapterTocModal {
         this.renderer.root.add(this.container)
         this.select.focus()
 
+        // Touch: tap a chapter to jump to it; tap the backdrop to close.
+        enableSelectTap(this.select)
+
         // Input handler for closing
         this.inputHandler = (seq: string) => {
             if (!this.visible) return false
@@ -126,6 +140,7 @@ export class ChapterTocModal {
             this.renderer.removeInputHandler(this.inputHandler)
             this.inputHandler = null
         }
+        try { this.renderer.root.remove("toc-backdrop") } catch { }
         try { this.renderer.root.remove(this.container.id) } catch { }
         this.onClose()
     }

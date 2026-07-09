@@ -9,6 +9,7 @@ import {
 } from "@opentui/core"
 import { theme, truncate } from "../utils/theme"
 import { getVocabulary, type VocabRecord } from "../services/database"
+import { enableTouchScroll } from "../utils/touch"
 
 export class VocabularyPanel {
     private renderer: CliRenderer
@@ -83,6 +84,9 @@ export class VocabularyPanel {
         leftPanel.add(this.listBox)
         this.container.add(leftPanel)
 
+        // Touch: drag-to-scroll the vocabulary list.
+        enableTouchScroll(this.listBox, { renderer: this.renderer })
+
         // Right panel: definition detail
         const rightPanel = new BoxRenderable(this.renderer, {
             id: "vocab-right",
@@ -118,6 +122,9 @@ export class VocabularyPanel {
         })
         rightPanel.add(this.detailBox)
         this.container.add(rightPanel)
+
+        // Touch: drag-to-scroll the definition detail.
+        enableTouchScroll(this.detailBox, { renderer: this.renderer })
 
         // Footer
         this.container.add(new TextRenderable(this.renderer, {

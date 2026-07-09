@@ -9,6 +9,7 @@ import {
     t, bold, fg,
 } from "@opentui/core"
 import { theme, truncate, spinnerFrames, progressBar, progressColor } from "../utils/theme"
+import { enableTouchScroll, enableTap } from "../utils/touch"
 import { insertBook, getBookByPath } from "../services/database"
 import { parseEpub } from "../services/epub-parser"
 import { parsePdf, hasPdfSupport } from "../services/pdf-parser"
@@ -247,6 +248,9 @@ export class ImportView {
         this.container.add(this.searchRow)
         this.container.add(this.fileList)
         this.renderer.root.add(this.container)
+
+        // Touch: drag-to-scroll the file list.
+        enableTouchScroll(this.fileList, { renderer: this.renderer })
         this.renderer.root.add(this.statusBar.root)
 
         this.pathInput.focus()
@@ -713,6 +717,13 @@ export class ImportView {
 
             this.fileList.add(row)
             this.cardRenderables.push(row)
+
+            // Touch: tap a file row to toggle its selection (like Space).
+            const idx = i
+            enableTap(row, () => {
+                this.selectedIndex = idx
+                this.toggleSelect()
+            })
         }
     }
 

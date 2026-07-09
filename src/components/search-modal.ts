@@ -9,6 +9,7 @@ import {
     t, bold, fg,
 } from "@opentui/core"
 import { theme, truncate } from "../utils/theme"
+import { enableTouchScroll, enableTap } from "../utils/touch"
 import type { ParsedBook } from "../services/epub-parser"
 
 interface SearchResult {
@@ -119,6 +120,9 @@ export class SearchModal {
             },
         })
         this.container.add(this.resultList)
+
+        // Touch: drag-to-scroll the results.
+        enableTouchScroll(this.resultList, { renderer: this.renderer })
 
         // Status
         this.container.add(new TextRenderable(this.renderer, {
@@ -274,6 +278,13 @@ export class SearchModal {
 
             this.resultList.add(row)
             this.resultCards.push(row)
+
+            // Touch: tap a search result to jump to it.
+            const idx = i
+            enableTap(row, () => {
+                this.selectedIndex = idx
+                this.selectResult()
+            })
         }
     }
 

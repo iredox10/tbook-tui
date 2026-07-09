@@ -34,6 +34,7 @@ import { CodeModal } from "../components/code-modal"
 import { TTSService } from "../services/tts"
 import { renderImageToTerminal, supportsImages } from "../utils/terminal-image"
 import { renderParagraph } from "../utils/render-paragraph"
+import { enableTouchScroll, enableTap } from "../utils/touch"
 import { exportBook, exportReadingSessionToObsidian } from "../services/export"
 import { loadConfig, updateConfig } from "../services/config"
 import { posix as pathPosix } from "path"
@@ -330,6 +331,14 @@ export class ReaderView {
 
         this.readingPane.focus()
 
+        // Touch: one-finger drag = scroll; long-press (350ms) = select text.
+        enableTouchScroll(this.readingPane, {
+            renderer: this.renderer,
+            enableLongPressSelect: true,
+        })
+        // Touch: sidebar drag = scroll (chapter list may overflow).
+        enableTouchScroll(this.sidebar)
+
         // Phase 4: Listen for text selection events
         this.renderer.on(CliRenderEvents.SELECTION, () => {
             const sel = this.renderer.getSelection()
@@ -370,7 +379,14 @@ export class ReaderView {
             const item = new TextRenderable(this.renderer, {
                 id: `sidebar-ch-${i}`,
                 content: t` ${fg(markerColor)(markerStr)}${fg(labelColor)(`${num}. ${truncate(ch.title, 19)}`)}`,
+                // selectable:false so taps/drags aren't intercepted for text
+                // selection; tap-to-jump is wired via enableTap below.
+                selectable: false,
             })
+
+            // Touch: tap a chapter title in the sidebar to jump to it.
+            const chapterIdx = i
+            enableTap(item, () => this.jumpToChapter(chapterIdx))
 
             this.sidebar.add(item)
             this.sidebarItems.push(item)
@@ -407,7 +423,10 @@ export class ReaderView {
         const th = getTheme()
         const textProps = {
             wrapMode: "word" as const,
-            selectable: true,
+            // selectable:false so one-finger drag pans the page (touch) instead
+            // of starting a text selection. Long-press arms text selection via
+            // enableTouchScroll on the readingPane.
+            selectable: false,
             selectionBg: th.accent.blue,
             selectionFg: th.bg.void,
         }
@@ -729,6 +748,21 @@ export class ReaderView {
             setTimeout(() => {
                 this.readingPane.scrollTo(savedPos)
             }, 50)
+        }
+    }
+
+    /** Jump directly to an absolute chapter index (sidebar/TOC tap). */
+    private jumpToChapter(chapterIndex: number) {
+        if (chapterIndex < 0 || chapterIndex >= this.parsedBook.chapters.length) return
+        if (chapterIndex === this.currentChapter) return
+        this.chapterScrollMemory.set(this.currentChapter, this.readingPane.scrollTop)
+        const leavingWords = this.chapterWordCountCache.get(this.currentChapter) || 0
+        this.wordsReadThisSession += leavingWords
+        this.currentChapter = chapterIndex
+        this.renderChapter()
+        const savedPos = this.chapterScrollMemory.get(chapterIndex)
+        if (savedPos !== undefined && savedPos > 0) {
+            setTimeout(() => { this.readingPane.scrollTo(savedPos) }, 50)
         }
     }
 

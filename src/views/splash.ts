@@ -9,6 +9,7 @@ import {
     t, bold, fg,
 } from "@opentui/core"
 import { theme } from "../utils/theme"
+import { enableSelectTap } from "../utils/touch"
 import { getAllBooks } from "../services/database"
 import type { App } from "../app"
 import { HelpOverlay } from "../components/help-overlay"
@@ -169,7 +170,10 @@ export class SplashView {
         this.modalOpen = true
         this.helpOverlay = new HelpOverlay(this.renderer, () => {
             this.modalOpen = false
-            this.menu.focus()
+        this.menu.focus()
+
+        // Touch: tap a menu item to select + activate it.
+        enableSelectTap(this.menu)
         })
         this.helpOverlay.show()
     }

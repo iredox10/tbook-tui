@@ -8,6 +8,7 @@ import {
     t, bold, fg,
 } from "@opentui/core"
 import { theme, progressBar, progressColor } from "../utils/theme"
+import { enableTouchScroll } from "../utils/touch"
 import { getWeeklyStats, getWeeklyStatsOffset, getTotalStats, getTodayStats, getSessionHistory } from "../services/database"
 import { loadConfig } from "../services/config"
 import { exportAllAnnotations } from "../services/export"
@@ -308,6 +309,9 @@ export class StatsView {
         }
 
         this.container.add(scrollArea)
+
+        // Touch: drag-to-scroll the stats dashboard.
+        enableTouchScroll(scrollArea, { renderer: this.renderer })
 
         // ── Status bar ──
         this.statusBar = new StatusBar({ renderer: this.renderer, mode: "stats" })

@@ -9,6 +9,7 @@ import {
     t, bold, fg,
 } from "@opentui/core"
 import { theme, progressBar, progressColor, truncate, relativeTime } from "../utils/theme"
+import { enableTouchScroll, enableTap } from "../utils/touch"
 import { getAllBooks, deleteBook, type BookRecord } from "../services/database"
 import { StatusBar } from "../components/status-bar"
 import { showToast } from "../components/toast"
@@ -145,6 +146,9 @@ export class LibraryView {
 
         // Render book cards
         this.renderBookCards()
+
+        // Touch: drag-to-scroll the list; tap a card to open it.
+        enableTouchScroll(this.bookList, { renderer: this.renderer })
 
         // ── Input handler ──
         this.inputHandler = (sequence: string) => {
@@ -361,6 +365,13 @@ export class LibraryView {
         content.add(titleRow)
         content.add(progressRow)
         card.add(content)
+
+        // Touch: tap a book card to open it.
+        const idx = index
+        enableTap(card, () => {
+            this.selectedIndex = idx
+            this.openSelectedBook()
+        })
 
         return card
     }
