@@ -144,10 +144,17 @@ export function getDb(): Database {
     CREATE TABLE IF NOT EXISTS vocabulary (
       word TEXT PRIMARY KEY,
       definition TEXT DEFAULT '',
+      fullData TEXT DEFAULT '',
       lookup_count INTEGER DEFAULT 1,
       last_lookup TEXT DEFAULT (datetime('now'))
     )
   `)
+
+    try {
+        db.run(`ALTER TABLE vocabulary ADD COLUMN fullData TEXT DEFAULT ''`)
+    } catch {
+        // column already exists
+    }
 
     db.run(`
     CREATE TABLE IF NOT EXISTS session_history (
@@ -374,17 +381,32 @@ export function removeHighlight(id: number): void {
 // Vocabulary
 // ─────────────────────────────────────────────────────────────
 
-export function addToVocabulary(word: string, definition: string): void {
+export function addToVocabulary(word: string, definition: string, fullData?: any): void {
     const db = getDb()
+    const fullJson = fullData ? JSON.stringify(fullData) : ""
     db.run(
-        `INSERT INTO vocabulary (word, definition, lookup_count, last_lookup)
-     VALUES (?, ?, 1, datetime('now'))
+        `INSERT INTO vocabulary (word, definition, fullData, lookup_count, last_lookup)
+     VALUES (?, ?, ?, 1, datetime('now'))
      ON CONFLICT(word) DO UPDATE SET
        lookup_count = lookup_count + 1,
        definition = excluded.definition,
+       fullData = CASE WHEN excluded.fullData != '' THEN excluded.fullData ELSE fullData END,
        last_lookup = datetime('now')`,
-        [word.toLowerCase(), definition],
+        [word.toLowerCase(), definition, fullJson],
     )
+}
+
+export function getCachedDefinition(word: string): any | null {
+    const db = getDb()
+    const row = db.query(
+        "SELECT fullData FROM vocabulary WHERE word = ?"
+    ).get(word.toLowerCase()) as { fullData?: string } | undefined
+    if (!row?.fullData) return null
+    try {
+        return JSON.parse(row.fullData)
+    } catch {
+        return null
+    }
 }
 
 export function getVocabulary(): VocabRecord[] {

@@ -72,12 +72,12 @@ export class AnnotationModal {
         }))
 
         this.renderer.root.add(this.container)
-        this.input.focus()
 
+        // Never focus the input — manage all input manually so ESC always works
         this.inputHandler = (seq: string) => {
             if (!this.visible) return false
 
-            if (seq === "\x1b") {
+            if (seq === "\x1b" || seq === "\x1b\x1b") {
                 this.hide()
                 this.onCancel()
                 return true
@@ -90,10 +90,34 @@ export class AnnotationModal {
                 return true
             }
 
+            // Backspace
+            if (seq === "\x7f" || seq === "\b") {
+                const val = this.input.value
+                if (val.length > 0) {
+                    this.input.value = val.slice(0, -1)
+                }
+                return true
+            }
+
+            // Ctrl+U: clear
+            if (seq === "\x15") {
+                this.input.value = ""
+                return true
+            }
+
+            // Printable ASCII
+            if (seq.length === 1) {
+                const ch = seq.charCodeAt(0)
+                if (ch >= 32 && ch < 127) {
+                    this.input.value += seq
+                    return true
+                }
+            }
+
             return false
         }
-        
-        this.renderer.addInputHandler(this.inputHandler)
+
+        this.renderer.prependInputHandler(this.inputHandler)
     }
 
     hide() {
@@ -102,6 +126,11 @@ export class AnnotationModal {
         this.container.destroy()
         if (this.inputHandler) {
             this.renderer.removeInputHandler(this.inputHandler)
+            this.inputHandler = null
         }
+    }
+
+    destroy() {
+        this.hide()
     }
 }

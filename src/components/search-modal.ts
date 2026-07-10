@@ -1,6 +1,9 @@
 // ─────────────────────────────────────────────────────────────
 // Search Modal — search within current book
 // ─────────────────────────────────────────────────────────────
+// Input is managed manually through the global handler so ESC
+// is never consumed by a focused renderable before we see it.
+// ─────────────────────────────────────────────────────────────
 
 import type { CliRenderer } from "@opentui/core"
 import {
@@ -15,8 +18,8 @@ import type { ParsedBook } from "../services/epub-parser"
 interface SearchResult {
     chapterIndex: number
     chapterTitle: string
-    context: string     // surrounding text
-    matchIndex: number  // position in paragraph text
+    context: string
+    matchIndex: number
 }
 
 export class SearchModal {
@@ -31,6 +34,8 @@ export class SearchModal {
     private resultCards: BoxRenderable[] = []
     private onSelect: (chapterIndex: number) => void
     private onClose: (lastQuery?: string) => void
+    private inputHandler: ((seq: string) => boolean) | null = null
+    private inputFocused = true
 
     constructor(
         renderer: CliRenderer,
@@ -48,6 +53,7 @@ export class SearchModal {
         this.book = book
         this.results = []
         this.selectedIndex = 0
+        this.inputFocused = true
 
         this.container = new BoxRenderable(this.renderer, {
             id: "search-overlay",
@@ -64,13 +70,11 @@ export class SearchModal {
             gap: 1,
         })
 
-        // Title
         this.container.add(new TextRenderable(this.renderer, {
             id: "search-title",
             content: t` ${bold(fg(theme.accent.amber)("🔍 Search in Book"))}`,
         }))
 
-        // Input row
         const inputRow = new BoxRenderable(this.renderer, {
             id: "search-input-row",
             width: "100%",
@@ -93,14 +97,12 @@ export class SearchModal {
         inputRow.add(this.input)
         this.container.add(inputRow)
 
-        // Separator
         this.container.add(new TextRenderable(this.renderer, {
             id: "search-results-sep",
             content: " " + "┄".repeat(36),
             fg: theme.border.normal,
         }))
 
-        // Results area
         this.resultList = new ScrollBoxRenderable(this.renderer, {
             id: "search-results",
             width: "100%",
@@ -121,34 +123,83 @@ export class SearchModal {
         })
         this.container.add(this.resultList)
 
-        // Touch: drag-to-scroll the results.
         enableTouchScroll(this.resultList, { renderer: this.renderer })
 
-        // Status
         this.container.add(new TextRenderable(this.renderer, {
             id: "search-footer",
             content: t`${fg(theme.text.subtle)(" ↑↓ Navigate · ⏎ Go to · Esc Close")}`,
         }))
 
         this.renderer.root.add(this.container)
-        this.input.focus()
 
-        // Live search on input
-        this.input.on(InputRenderableEvents.INPUT, () => {
-            this.performSearch(this.input.value)
-        })
-
-        // Input handler
-        this.renderer.addInputHandler((seq: string) => {
+        // Input handler — prepend so it fires before any focused element
+        this.inputHandler = (seq: string) => {
             if (!this.visible) return false
 
-            if (seq === "\x1b") {
+            // ESC: always close
+            if (seq === "\x1b" || seq === "\x1b\x1b") {
                 this.hide()
                 return true
             }
 
-            // Navigate results when not focused on input
-            if (!this.input.focused) {
+            if (this.inputFocused) {
+                // Enter: select first result
+                if (seq === "\r" || seq === "\n") {
+                    if (this.results.length > 0) {
+                        this.selectResult()
+                    }
+                    return true
+                }
+
+                // Backspace
+                if (seq === "\x7f" || seq === "\b") {
+                    const val = this.input.value
+                    if (val.length > 0) {
+                        this.input.value = val.slice(0, -1)
+                        this.performSearch(this.input.value)
+                    }
+                    return true
+                }
+
+                // Ctrl+U: clear
+                if (seq === "\x15") {
+                    this.input.value = ""
+                    this.performSearch("")
+                    return true
+                }
+
+                // Tab or j/k/arrows: switch to result navigation
+                if (seq === "\t") {
+                    this.inputFocused = false
+                    this.resultList.focus()
+                    return true
+                }
+                if (seq === "j" || seq === "\x1b[B") {
+                    this.inputFocused = false
+                    this.resultList.focus()
+                    this.moveSelection(1)
+                    return true
+                }
+                if (seq === "k" || seq === "\x1b[A") {
+                    this.inputFocused = false
+                    this.resultList.focus()
+                    this.moveSelection(-1)
+                    return true
+                }
+
+                // Printable ASCII
+                if (seq.length === 1) {
+                    const ch = seq.charCodeAt(0)
+                    if (ch >= 32 && ch < 127) {
+                        this.input.value += seq
+                        this.performSearch(this.input.value)
+                        return true
+                    }
+                }
+
+                return true
+            } else {
+                // Result-focused
                 if (seq === "q") {
                     this.hide()
                     return true
@@ -165,24 +216,24 @@ export class SearchModal {
                     this.selectResult()
                     return true
                 }
-                if (seq === "/") {
-                    this.input.focus()
+                // Tab or typing: switch back to input mode
+                if (seq === "\t") {
+                    this.inputFocused = true
                     return true
                 }
-            }
-
-            // Tab to switch focus between input and results
-            if (seq === "\t") {
-                if (this.input.focused) {
-                    this.resultList.focus()
-                } else {
-                    this.input.focus()
+                if (seq.length === 1) {
+                    const ch = seq.charCodeAt(0)
+                    if (ch >= 32 && ch < 127) {
+                        this.inputFocused = true
+                        this.input.value += seq
+                        this.performSearch(this.input.value)
+                        return true
+                    }
                 }
                 return true
             }
-
-            return false
-        })
+        }
+        this.renderer.prependInputHandler(this.inputHandler)
     }
 
     private performSearch(query: string) {
@@ -195,14 +246,12 @@ export class SearchModal {
             return
         }
 
-        // Search through all chapters
         for (let ci = 0; ci < this.book.chapters.length; ci++) {
             const chapter = this.book.chapters[ci]!
             for (const para of chapter.paragraphs) {
                 const lowerText = para.text.toLowerCase()
                 const idx = lowerText.indexOf(q)
                 if (idx !== -1) {
-                    // Extract surrounding context
                     const start = Math.max(0, idx - 30)
                     const end = Math.min(para.text.length, idx + q.length + 30)
                     let context = para.text.slice(start, end)
@@ -215,8 +264,6 @@ export class SearchModal {
                         context,
                         matchIndex: idx,
                     })
-
-                    // Cap results
                     if (this.results.length >= 50) break
                 }
             }
@@ -227,7 +274,6 @@ export class SearchModal {
     }
 
     private renderResults() {
-        // Clear
         for (const card of this.resultCards) {
             try { this.resultList.remove(card.id) } catch { }
         }
@@ -279,7 +325,6 @@ export class SearchModal {
             this.resultList.add(row)
             this.resultCards.push(row)
 
-            // Touch: tap a search result to jump to it.
             const idx = i
             enableTap(row, () => {
                 this.selectedIndex = idx
@@ -305,6 +350,10 @@ export class SearchModal {
     hide() {
         if (!this.visible) return
         this.visible = false
+        if (this.inputHandler) {
+            this.renderer.removeInputHandler(this.inputHandler)
+            this.inputHandler = null
+        }
         const lastQuery = this.input?.value?.trim() || ""
         try { this.renderer.root.remove(this.container.id) } catch { }
         this.onClose(lastQuery)

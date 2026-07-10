@@ -1,6 +1,9 @@
 // ─────────────────────────────────────────────────────────────
 // Dictionary Modal — word definition lookup overlay
 // ─────────────────────────────────────────────────────────────
+// Input is managed manually through the global handler so ESC
+// is never consumed by a focused renderable before we see it.
+// ─────────────────────────────────────────────────────────────
 
 import type { CliRenderer } from "@opentui/core"
 import {
@@ -18,10 +21,13 @@ export class DictionaryModal {
     private container!: BoxRenderable
     private resultBox!: ScrollBoxRenderable
     private input!: InputRenderable
+    private inputDisplay!: TextRenderable
     private visible = false
     private resultNodes: TextRenderable[] = []
     private onClose: () => void
     private inputHandler: ((seq: string) => boolean) | null = null
+    private word = ""
+    private inputFocused = true
 
     constructor(renderer: CliRenderer, onClose: () => void) {
         this.renderer = renderer
@@ -31,6 +37,8 @@ export class DictionaryModal {
     show(initialWord?: string) {
         if (this.visible) return
         this.visible = true
+        this.word = initialWord || ""
+        this.inputFocused = true
 
         this.container = new BoxRenderable(this.renderer, {
             id: "dict-overlay",
@@ -53,16 +61,17 @@ export class DictionaryModal {
             content: t` ${bold(fg(theme.accent.green)("📚 Dictionary"))}`,
         }))
 
-        // Input
+        // Input row with a plain TextRenderable display (cursor blinking handled by the footer)
         const inputRow = new BoxRenderable(this.renderer, {
             id: "dict-input-row",
             width: "100%",
             height: 1,
             flexDirection: "row",
-            gap: 1,
+            gap: 0,
             paddingLeft: 1,
         })
 
+        // Hidden InputRenderable for visual appearance (never focused — managed manually)
         this.input = new InputRenderable(this.renderer, {
             id: "dict-input",
             width: 30,
@@ -73,7 +82,6 @@ export class DictionaryModal {
             textColor: theme.text.body,
             cursorColor: theme.accent.green,
         })
-
         inputRow.add(this.input)
         this.container.add(inputRow)
 
@@ -111,42 +119,96 @@ export class DictionaryModal {
         // Footer
         this.container.add(new TextRenderable(this.renderer, {
             id: "dict-footer",
-            content: t`${fg(theme.text.subtle)(" ⏎ Look up · Esc Close")}`,
+            content: t`${fg(theme.text.subtle)(" ⏎ Look up · Esc Close · Type to search")}`,
         }))
 
         this.renderer.root.add(this.container)
-        this.input.focus()
 
         // If initial word provided, look it up immediately
         if (initialWord && initialWord.trim().length > 1) {
             this.doLookup(initialWord)
         }
 
-        // Submit on enter
-        this.input.on(InputRenderableEvents.ENTER, () => {
-            this.doLookup(this.input.value)
-        })
-
-        // Input handler — prepend for high priority (runs before reader's handler)
+        // Register input handler with prepend so it fires before any focused element
+        // We never focus the InputRenderable, so ESC reaches us directly
         this.inputHandler = (seq: string) => {
             if (!this.visible) return false
-            if (seq === "\x1b" || seq === "\x1b\x1b" || (seq === "q" && !this.input.focused)) {
+
+            // ESC: close modal (always works regardless of "focus" state)
+            if (seq === "\x1b" || seq === "\x1b\x1b") {
                 this.hide()
                 return true
             }
 
-            if (seq === "\t") {
-                if (this.input.focused) {
-                    this.input.blur()
+            if (this.inputFocused) {
+                // Enter: submit lookup
+                if (seq === "\r" || seq === "\n") {
+                    this.doLookup(this.word)
+                    this.inputFocused = false
                     this.resultBox.focus()
-                } else {
-                    this.input.focus()
+                    return true
                 }
-                return true
-            }
 
-            if (!this.input.focused) {
-                // Scroll results with j/k or arrows
+                // Backspace
+                if (seq === "\x7f" || seq === "\b") {
+                    if (this.word.length > 0) {
+                        this.word = this.word.slice(0, -1)
+                        this.input.value = this.word
+                    }
+                    return true
+                }
+
+                // Ctrl+U: clear input
+                if (seq === "\x15") {
+                    this.word = ""
+                    this.input.value = ""
+                    return true
+                }
+
+                // Tab or j/k or arrows when input focused: switch to scroll mode
+                if (seq === "\t") {
+                    this.inputFocused = false
+                    this.resultBox.focus()
+                    return true
+                }
+                if (seq === "j" || seq === "\x1b[B") {
+                    this.inputFocused = false
+                    this.resultBox.focus()
+                    this.resultBox.scrollBy(1)
+                    return true
+                }
+                if (seq === "k" || seq === "\x1b[A") {
+                    this.inputFocused = false
+                    this.resultBox.focus()
+                    this.resultBox.scrollBy(-1)
+                    return true
+                }
+
+                // Printable ASCII characters (directly append to word buffer)
+                if (seq.length === 1) {
+                    const ch = seq.charCodeAt(0)
+                    if (ch >= 32 && ch < 127 && this.word.length < 60) {
+                        this.word += seq
+                        this.input.value = this.word
+                        return true
+                    }
+                }
+
+                return true // consume all other keys while input-focused
+            } else {
+                // Result-focused: q closes (same as ESC for convenience)
+                if (seq === "q") {
+                    this.hide()
+                    return true
+                }
+
+                // Tab or typing: switch back to input mode
+                if (seq === "\t") {
+                    this.inputFocused = true
+                    return true
+                }
+
+                // j/k/arrows scroll
                 if (seq === "j" || seq === "\x1b[B") {
                     this.resultBox.scrollBy(1)
                     return true
@@ -155,8 +217,21 @@ export class DictionaryModal {
                     this.resultBox.scrollBy(-1)
                     return true
                 }
+
+                // Any printable char switches to input mode and types it
+                if (seq.length === 1) {
+                    const ch = seq.charCodeAt(0)
+                    if (ch >= 32 && ch < 127) {
+                        this.inputFocused = true
+                        if (!this.word) this.word = ""
+                        this.word += seq
+                        this.input.value = this.word
+                        return true
+                    }
+                }
+
+                return true // consume all other keys while result-focused
             }
-            return false
         }
         this.renderer.prependInputHandler(this.inputHandler)
     }
@@ -191,11 +266,11 @@ export class DictionaryModal {
             return
         }
 
-        // Save to vocabulary DB
+        // Save to vocabulary DB (with full data for offline reuse)
         const defSummary = entry.meanings.map(m =>
             `${m.partOfSpeech}: ${m.definitions.map(d => d.definition).join("; ")}`
         ).join(" | ")
-        addToVocabulary(clean, defSummary)
+        addToVocabulary(clean, defSummary, entry)
 
         this.renderEntry(entry)
     }

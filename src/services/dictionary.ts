@@ -1,6 +1,10 @@
 // ─────────────────────────────────────────────────────────────
 // Dictionary Service — word definition lookup
+// Online API first, then vocabulary DB cache, then offline fallback
 // ─────────────────────────────────────────────────────────────
+
+import { getCachedDefinition, addToVocabulary } from "./database"
+import { lookupOffline } from "../data/offline-dictionary"
 
 export interface DictionaryEntry {
     word: string
@@ -16,40 +20,69 @@ export interface DictionaryEntry {
 }
 
 /**
- * Look up a word using the free Dictionary API
- * Falls back gracefully if offline
+ * Look up a word using the free Dictionary API.
+ * Falls back to DB cache, then offline dictionary.
  */
 export async function lookupWord(word: string): Promise<DictionaryEntry | null> {
     const clean = word.trim().toLowerCase().replace(/[^a-z'-]/g, "")
     if (!clean || clean.length < 2) return null
 
+    // 1. Try online API
     try {
         const response = await fetch(
             `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(clean)}`,
         )
 
-        if (!response.ok) return null
+        if (response.ok) {
+            const data = await response.json() as any[]
+            if (data && data.length > 0) {
+                const entry = data[0]
+                const result: DictionaryEntry = {
+                    word: entry.word || clean,
+                    phonetic: entry.phonetic || entry.phonetics?.[0]?.text || "",
+                    meanings: (entry.meanings || []).map((m: any) => ({
+                        partOfSpeech: m.partOfSpeech || "unknown",
+                        definitions: (m.definitions || []).slice(0, 3).map((d: any) => ({
+                            definition: d.definition || "",
+                            example: d.example || undefined,
+                        })),
+                    })),
+                    source: "dictionaryapi.dev",
+                }
 
-        const data = await response.json() as any[]
-        if (!data || data.length === 0) return null
+                // Cache for offline reuse
+                const defSummary = result.meanings.map(m =>
+                    `${m.partOfSpeech}: ${m.definitions.map(d => d.definition).join("; ")}`
+                ).join(" | ")
+                addToVocabulary(clean, defSummary, result)
 
-        const entry = data[0]
-
-        return {
-            word: entry.word || clean,
-            phonetic: entry.phonetic || entry.phonetics?.[0]?.text || "",
-            meanings: (entry.meanings || []).map((m: any) => ({
-                partOfSpeech: m.partOfSpeech || "unknown",
-                definitions: (m.definitions || []).slice(0, 3).map((d: any) => ({
-                    definition: d.definition || "",
-                    example: d.example || undefined,
-                })),
-            })),
-            source: "dictionaryapi.dev",
+                return result
+            }
         }
     } catch {
-        return null
+        // Network error — continue to fallbacks
     }
+
+    // 2. Check vocabulary DB cache (previously looked up online)
+    const cached = getCachedDefinition(clean)
+    if (cached && cached.word) {
+        return cached as DictionaryEntry
+    }
+
+    // 3. Fall back to offline dictionary
+    const offlineText = lookupOffline(clean)
+    if (offlineText) {
+        return {
+            word: clean,
+            meanings: [{
+                partOfSpeech: "unknown",
+                definitions: [{ definition: offlineText }],
+            }],
+            source: "offline dictionary",
+        }
+    }
+
+    return null
 }
 
 /**
@@ -58,7 +91,7 @@ export async function lookupWord(word: string): Promise<DictionaryEntry | null> 
 export function formatDictionaryEntry(entry: DictionaryEntry): string {
     const lines: string[] = []
 
-    lines.push(`📖 ${entry.word}`)
+    lines.push(`\uD83D\uDCD6 ${entry.word}`)
     if (entry.phonetic) {
         lines.push(`   ${entry.phonetic}`)
     }
