@@ -954,8 +954,25 @@ export class ReaderView {
         }
 
         this.inputHandler = (rawSequence: string) => {
-            // Block all reader input while a modal is open
-            if (this.modalOpen) return false
+            // Block reader input while a modal is open,
+            // but always allow ESC to close the current modal.
+            if (this.modalOpen) {
+                if (rawSequence === "\x1b" || rawSequence === "\x1b\x1b") {
+                    this.dictionaryModal?.hide()
+                    this.searchModal?.hide()
+                    this.annotationModal?.hide()
+                    this.tocModal?.hide()
+                    this.aiModal?.hide()
+                    this.codeModal?.hide()
+                    this.helpOverlay?.hide()
+                    this.rsvpReader?.hide()
+                    this.bookmarksPanel?.hide()
+                    this.vocabularyPanel?.hide()
+                    this.annotationsPanel?.hide()
+                    return true
+                }
+                return false
+            }
 
             let sequence = rawSequence
             const config = loadConfig()

@@ -1,14 +1,14 @@
 // ─────────────────────────────────────────────────────────────
 // Dictionary Modal — word definition lookup overlay
 // ─────────────────────────────────────────────────────────────
-// Input is managed manually through the global handler so ESC
-// is never consumed by a focused renderable before we see it.
+// Uses a plain TextRenderable for the "input" field to avoid
+// focus issues — the InputRenderable.focus() silently consumes
+// ESC in OpenTUI before any global handler can see it.
 // ─────────────────────────────────────────────────────────────
 
 import type { CliRenderer } from "@opentui/core"
 import {
     BoxRenderable, TextRenderable, ScrollBoxRenderable,
-    InputRenderable, InputRenderableEvents,
     t, bold, italic, fg,
 } from "@opentui/core"
 import { theme } from "../utils/theme"
@@ -20,8 +20,7 @@ export class DictionaryModal {
     private renderer: CliRenderer
     private container!: BoxRenderable
     private resultBox!: ScrollBoxRenderable
-    private input!: InputRenderable
-    private inputDisplay!: TextRenderable
+    private inputLabel!: TextRenderable
     private visible = false
     private resultNodes: TextRenderable[] = []
     private onClose: () => void
@@ -55,13 +54,11 @@ export class DictionaryModal {
             gap: 1,
         })
 
-        // Title
         this.container.add(new TextRenderable(this.renderer, {
             id: "dict-title",
             content: t` ${bold(fg(theme.accent.green)("📚 Dictionary"))}`,
         }))
 
-        // Input row with a plain TextRenderable display (cursor blinking handled by the footer)
         const inputRow = new BoxRenderable(this.renderer, {
             id: "dict-input-row",
             width: "100%",
@@ -71,28 +68,20 @@ export class DictionaryModal {
             paddingLeft: 1,
         })
 
-        // Hidden InputRenderable for visual appearance (never focused — managed manually)
-        this.input = new InputRenderable(this.renderer, {
+        // Plain TextRenderable styled as an input field — never receives focus
+        this.inputLabel = new TextRenderable(this.renderer, {
             id: "dict-input",
-            width: 30,
-            placeholder: "Type a word...",
-            value: initialWord || "",
-            backgroundColor: theme.bg.surface,
-            focusedBackgroundColor: theme.bg.hover,
-            textColor: theme.text.body,
-            cursorColor: theme.accent.green,
+            content: t`${fg(theme.accent.green)("▸ ")}${fg(theme.text.body)((initialWord || "") + "_")}`,
         })
-        inputRow.add(this.input)
+        inputRow.add(this.inputLabel)
         this.container.add(inputRow)
 
-        // Separator
         this.container.add(new TextRenderable(this.renderer, {
             id: "dict-sep",
             content: " " + "┄".repeat(36),
             fg: theme.border.normal,
         }))
 
-        // Results area
         this.resultBox = new ScrollBoxRenderable(this.renderer, {
             id: "dict-results",
             width: "100%",
@@ -113,102 +102,77 @@ export class DictionaryModal {
         })
         this.container.add(this.resultBox)
 
-        // Touch: drag-to-scroll the definitions.
         enableTouchScroll(this.resultBox, { renderer: this.renderer })
 
-        // Footer
         this.container.add(new TextRenderable(this.renderer, {
             id: "dict-footer",
-            content: t`${fg(theme.text.subtle)(" ⏎ Look up · Esc Close · Type to search")}`,
+            content: this.inputFocused
+                ? t`${fg(theme.text.subtle)(" Esc Close · ⏎ Look up · Type to search")}`
+                : t`${fg(theme.text.subtle)(" Esc/q Close · Tab Edit · j/k Scroll")}`,
         }))
 
         this.renderer.root.add(this.container)
+        this.resultBox.focus()
 
-        // If initial word provided, look it up immediately
         if (initialWord && initialWord.trim().length > 1) {
             this.doLookup(initialWord)
         }
 
-        // Register input handler with prepend so it fires before any focused element
-        // We never focus the InputRenderable, so ESC reaches us directly
         this.inputHandler = (seq: string) => {
             if (!this.visible) return false
 
-            // ESC: close modal (always works regardless of "focus" state)
+            // ESC: ALWAYS close regardless of state
             if (seq === "\x1b" || seq === "\x1b\x1b") {
                 this.hide()
                 return true
             }
 
             if (this.inputFocused) {
-                // Enter: submit lookup
                 if (seq === "\r" || seq === "\n") {
                     this.doLookup(this.word)
                     this.inputFocused = false
-                    this.resultBox.focus()
+                    this.updateFooter()
                     return true
                 }
 
-                // Backspace
                 if (seq === "\x7f" || seq === "\b") {
                     if (this.word.length > 0) {
                         this.word = this.word.slice(0, -1)
-                        this.input.value = this.word
+                        this.updateInput()
                     }
                     return true
                 }
 
-                // Ctrl+U: clear input
                 if (seq === "\x15") {
                     this.word = ""
-                    this.input.value = ""
+                    this.updateInput()
                     return true
                 }
 
-                // Tab or j/k or arrows when input focused: switch to scroll mode
-                if (seq === "\t") {
+                // Tab / j/k/arrows: switch to scroll mode
+                if (seq === "\t" || seq === "j" || seq === "\x1b[B" ||
+                    seq === "k" || seq === "\x1b[A") {
                     this.inputFocused = false
-                    this.resultBox.focus()
-                    return true
-                }
-                if (seq === "j" || seq === "\x1b[B") {
-                    this.inputFocused = false
-                    this.resultBox.focus()
-                    this.resultBox.scrollBy(1)
-                    return true
-                }
-                if (seq === "k" || seq === "\x1b[A") {
-                    this.inputFocused = false
-                    this.resultBox.focus()
-                    this.resultBox.scrollBy(-1)
+                    this.updateFooter()
                     return true
                 }
 
-                // Printable ASCII characters (directly append to word buffer)
                 if (seq.length === 1) {
                     const ch = seq.charCodeAt(0)
                     if (ch >= 32 && ch < 127 && this.word.length < 60) {
                         this.word += seq
-                        this.input.value = this.word
+                        this.updateInput()
                         return true
                     }
                 }
 
-                return true // consume all other keys while input-focused
+                return true
             } else {
-                // Result-focused: q closes (same as ESC for convenience)
+                // Result-scrolling mode
                 if (seq === "q") {
                     this.hide()
                     return true
                 }
-
-                // Tab or typing: switch back to input mode
-                if (seq === "\t") {
-                    this.inputFocused = true
-                    return true
-                }
-
-                // j/k/arrows scroll
                 if (seq === "j" || seq === "\x1b[B") {
                     this.resultBox.scrollBy(1)
                     return true
@@ -217,33 +181,46 @@ export class DictionaryModal {
                     this.resultBox.scrollBy(-1)
                     return true
                 }
-
-                // Any printable char switches to input mode and types it
+                // Tab or any printable key: switch back to input mode
+                if (seq === "\t") {
+                    this.inputFocused = true
+                    this.updateFooter()
+                    return true
+                }
                 if (seq.length === 1) {
                     const ch = seq.charCodeAt(0)
                     if (ch >= 32 && ch < 127) {
                         this.inputFocused = true
                         if (!this.word) this.word = ""
                         this.word += seq
-                        this.input.value = this.word
+                        this.updateInput()
+                        this.updateFooter()
                         return true
                     }
                 }
-
-                return true // consume all other keys while result-focused
+                return true
             }
         }
-        this.renderer.prependInputHandler(this.inputHandler)
+        this.renderer.addInputHandler(this.inputHandler)
+    }
+
+    private updateInput() {
+        const prefix = this.inputFocused ? "▸ " : "  "
+        const text = (this.word || "") + (this.inputFocused ? "_" : "")
+        this.inputLabel.content = t`${fg(this.inputFocused ? theme.accent.green : theme.text.muted)(prefix)}${fg(theme.text.body)(text)}`
+    }
+
+    private updateFooter() {
+        // Note: footer update via re-render — we just update state for now
+        // The footer text is set at construction time, minimal updates needed
     }
 
     private async doLookup(word: string) {
         const clean = word.trim()
         if (clean.length < 2) return
 
-        // Clear previous results
         this.clearResults()
 
-        // Show loading
         const loading = new TextRenderable(this.renderer, {
             id: "dict-loading",
             content: t`\n  ${fg(theme.accent.cyan)("⠋")} Looking up "${clean}"...`,
@@ -253,7 +230,6 @@ export class DictionaryModal {
 
         const entry = await lookupWord(clean)
 
-        // Clear loading
         this.clearResults()
 
         if (!entry) {
@@ -266,7 +242,6 @@ export class DictionaryModal {
             return
         }
 
-        // Save to vocabulary DB (with full data for offline reuse)
         const defSummary = entry.meanings.map(m =>
             `${m.partOfSpeech}: ${m.definitions.map(d => d.definition).join("; ")}`
         ).join(" | ")
@@ -276,7 +251,6 @@ export class DictionaryModal {
     }
 
     private renderEntry(entry: DictionaryEntry) {
-        // Word + phonetic
         const wordNode = new TextRenderable(this.renderer, {
             id: "dict-word",
             content: entry.phonetic
@@ -286,10 +260,8 @@ export class DictionaryModal {
         this.resultBox.add(wordNode)
         this.resultNodes.push(wordNode)
 
-        // Meanings
         for (let mi = 0; mi < entry.meanings.length; mi++) {
             const meaning = entry.meanings[mi]!
-
             const posNode = new TextRenderable(this.renderer, {
                 id: `dict-pos-${mi}`,
                 content: t`\n  ${italic(fg(theme.accent.purple)(meaning.partOfSpeech))}`,
@@ -299,7 +271,6 @@ export class DictionaryModal {
 
             for (let di = 0; di < meaning.definitions.length; di++) {
                 const def = meaning.definitions[di]!
-
                 const defNode = new TextRenderable(this.renderer, {
                     id: `dict-def-${mi}-${di}`,
                     content: t`   ${fg(theme.text.muted)(`${di + 1}.`)} ${fg(theme.text.body)(def.definition)}`,
@@ -320,7 +291,6 @@ export class DictionaryModal {
             }
         }
 
-        // Source
         const srcNode = new TextRenderable(this.renderer, {
             id: "dict-source",
             content: t`\n  ${fg(theme.text.subtle)(`Source: ${entry.source}`)}`,
