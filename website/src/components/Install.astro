@@ -1,0 +1,106 @@
+---
+const installSteps = [
+  {
+    title: "Install with Bun",
+    command: "bun add -g iredox-tbook-tui",
+    note: "Requires Bun 1.0+. For PDF support, install poppler-utils.",
+  },
+  {
+    title: "Launch TBook",
+    command: "tbook-tui",
+    note: "Run from anywhere. Your library lives in ~/.tbook/.",
+  },
+];
+
+const platformDeps = [
+  { platform: "Ubuntu / Debian", cmd: "sudo apt install poppler-utils" },
+  { platform: "macOS", cmd: "brew install poppler" },
+  { platform: "Optional OCR", cmd: "sudo apt install tesseract-ocr" },
+];
+---
+
+<section id="install" class="section">
+  <div class="container">
+    <div class="grid lg:grid-cols-2 gap-16 items-start">
+      <div>
+        <p class="text-sm font-mono text-cyan mb-3">GET STARTED</p>
+        <h2 class="text-4xl sm:text-5xl font-bold mb-5">Install in seconds</h2>
+        <p class="text-muted text-lg mb-8">
+          One global install and you're ready. TBook stores your library, bookmarks, highlights and config in <code class="text-cyan">~/.tbook/</code>.
+        </p>
+
+        <div class="space-y-6">
+          {installSteps.map((step, i) => (
+            <div class="bg-card border border-border-normal/50 rounded-xl p-6">
+              <div class="flex items-center gap-3 mb-3">
+                <span class="flex items-center justify-center w-7 h-7 rounded-full bg-surface text-sm font-bold text-cyan border border-border-normal">
+                  {i + 1}
+                </span>
+                <h3 class="text-lg font-semibold text-bright">{step.title}</h3>
+              </div>
+              <div class="relative group">
+                <pre class="bg-void border border-border-normal/50 rounded-lg p-4 font-mono text-sm text-body overflow-x-auto"><code>{step.command}</code></pre>
+                <button
+                  class="copy-btn absolute top-3 right-3 opacity-0 group-hover:opacity-100 transition-opacity"
+                  data-copy={step.command}
+                  aria-label="Copy command"
+                >
+                  Copy
+                </button>
+              </div>
+              <p class="text-muted text-sm mt-3">{step.note}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div class="lg:pt-20">
+        <div class="bg-card border border-border-normal/50 rounded-xl p-6">
+          <h3 class="text-lg font-semibold text-bright mb-5">System dependencies</h3>
+          <p class="text-muted text-sm mb-6">
+            PDF parsing relies on <code class="text-purple">pdftohtml</code> from Poppler. OCR support for scanned PDFs is optional.
+          </p>
+          <div class="space-y-4">
+            {platformDeps.map((dep) => (
+              <div class="relative group">
+                <div class="flex items-center justify-between mb-2">
+                  <span class="text-sm font-medium text-bright">{dep.platform}</span>
+                  <button
+                    class="copy-btn text-xs"
+                    data-copy={dep.cmd}
+                    aria-label="Copy dependency command"
+                  >
+                    Copy
+                  </button>
+                </div>
+                <pre class="bg-void border border-border-normal/50 rounded-lg p-3 font-mono text-xs text-body overflow-x-auto"><code>{dep.cmd}</code></pre>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div class="mt-6 p-5 rounded-xl border border-dashed border-border-normal/50 text-center">
+          <p class="text-muted text-sm">
+            Prefer npm? You can also run via <code class="text-cyan">npx iredox-tbook-tui</code> after a global install.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  document.querySelectorAll("[data-copy]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const text = btn.getAttribute("data-copy") || "";
+      try {
+        await navigator.clipboard.writeText(text);
+        const original = btn.textContent;
+        btn.textContent = "Copied!";
+        setTimeout(() => (btn.textContent = original), 1500);
+      } catch {
+        btn.textContent = "Failed";
+      }
+    });
+  });
+</script>

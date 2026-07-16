@@ -5,6 +5,7 @@
 import type { CliRenderer } from "@opentui/core"
 import {
     BoxRenderable, TextRenderable, ScrollBoxRenderable,
+    StyledText, type TextChunk,
     t, bold, fg,
 } from "@opentui/core"
 import { theme, progressBar, progressColor } from "../utils/theme"
@@ -194,24 +195,40 @@ export class StatsView {
         const vBlocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
         const chartHeight = 8
 
+        // Helper to create a plain text chunk
+        const plain = (text: string): TextChunk => ({ __isChunk: true, text } as TextChunk)
+
         // Render chart rows from top to bottom
         for (let row = chartHeight - 1; row >= 0; row--) {
-            let line = "  "
+            const chunks: TextChunk[] = [plain("  ")]
             for (const b of bars) {
                 const blockIdx = Math.max(0, Math.min(vBlocks.length - 1, b.height - 1 - (chartHeight - 1 - row)))
                 const showBlock = b.height > (chartHeight - 1 - row)
                 if (showBlock) {
                     const color = b.isToday ? theme.accent.purple : theme.accent.blue
-                    line += `${fg(color)(vBlocks[blockIdx]!)} `
+                    chunks.push(fg(color)(vBlocks[blockIdx]!))
+                    chunks.push(plain(" "))
                 } else {
-                    line += "  "
+                    chunks.push(plain("  "))
                 }
             }
             chartBox.add(new TextRenderable(this.renderer, {
                 id: `stats-vrow-${row}`,
-                content: line,
+                content: new StyledText(chunks),
             }))
         }
+
+        // Day labels below the chart bars
+        const labelChunks: TextChunk[] = [plain("  ")]
+        for (const b of bars) {
+            const color = b.isToday ? theme.accent.purple : theme.text.subtle
+            labelChunks.push(fg(color)(b.label.padEnd(2)))
+            labelChunks.push(plain(" "))
+        }
+        chartBox.add(new TextRenderable(this.renderer, {
+            id: "stats-chart-labels",
+            content: new StyledText(labelChunks),
+        }))
 
         scrollArea.add(chartBox)
 

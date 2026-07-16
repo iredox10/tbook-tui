@@ -1,0 +1,64 @@
+---
+const faqs = [
+  {
+    q: "What book formats does TBook TUI support?",
+    a: "TBook reads EPUB, PDF, Markdown and plain text files. PDF support requires poppler-utils to be installed on your system.",
+  },
+  {
+    q: "Do I need a specific terminal?",
+    a: "Any modern terminal emulator works. True-color support is recommended for the best Tokyo Night experience, but the app degrades gracefully.",
+  },
+  {
+    q: "Where is my data stored?",
+    a: "Everything lives in ~/.tbook/: a SQLite database for books, bookmarks, highlights and stats, plus a config.json for preferences.",
+  },
+  {
+    q: "Can I use my own AI provider?",
+    a: "Yes. TBook uses Ollama by default for summarization and explanations, and you can configure it to use OpenAI-compatible APIs instead.",
+  },
+  {
+    q: "Does it work with scanned PDFs?",
+    a: "Scanned PDFs need an OCR step. Install tesseract-ocr and TBook will detect and process image-only PDFs when possible.",
+  },
+  {
+    q: "Is the app free?",
+    a: "Yes, TBook TUI is open source under the MIT license.",
+  },
+];
+---
+
+<section id="faq" class="section">
+  <div class="container max-w-3xl">
+    <div class="text-center mb-12">
+      <p class="text-sm font-mono text-pink mb-3">FAQ</p>
+      <h2 class="text-4xl sm:text-5xl font-bold mb-5">Questions & answers</h2>
+      <p class="text-muted text-lg">Everything you need to know before diving in.</p>
+    </div>
+
+    <div class="space-y-4">
+      {faqs.map((faq) => (
+        <details class="reveal">
+          <summary>{faq.q}</summary>
+          <div>
+            <p>{faq.a}</p>
+          </div>
+        </details>
+      ))}
+    </div>
+  </div>
+</section>
+
+<script>
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("visible");
+        }
+      });
+    },
+    { threshold: 0.1 }
+  );
+
+  document.querySelectorAll("#faq .reveal").forEach((el) => observer.observe(el));
+</script>

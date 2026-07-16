@@ -2252,7 +2252,7 @@ export class ReaderView {
                     })
                     let content = `\n${terminalImage}\n`
                     if (alt && alt !== "[Image]") {
-                        content += `  ${fg(th.text.subtle)(italic(`↑ ${alt}`))}\n`
+                        content += t`  ${fg(th.text.subtle)(italic(`↑ ${alt}`))}\n`.toString()
                     }
                     node.content = content
                 } else {
@@ -2352,9 +2352,9 @@ export class ReaderView {
             }
 
             if (isVisible) {
-                lines.push(` ${bg(th.bg.hover)(fg(th.text.body)(char))} `)
+                lines.push(t` ${bg(th.bg.hover)(fg(th.text.body)(char))} `.toString())
             } else {
-                lines.push(` ${bg(th.bg.void)(fg(color)(char))} `)
+                lines.push(t` ${bg(th.bg.void)(fg(color)(char))} `.toString())
             }
         }
 

@@ -1,0 +1,91 @@
+---
+---
+
+<section class="relative min-h-screen flex flex-col items-center justify-center px-6 pt-24 pb-16">
+  <div class="container mx-auto max-w-6xl">
+    <div class="grid lg:grid-cols-2 gap-16 items-center">
+      <!-- Text -->
+      <div class="text-center lg:text-left">
+        <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-surface border border-border-normal/50 text-sm text-muted mb-8">
+          <span class="w-2 h-2 rounded-full bg-green animate-pulse"></span>
+          v1.0.3 now available
+        </div>
+
+        <h1 class="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight mb-6">
+          Read books<br />
+          <span class="gradient-text">in your terminal.</span>
+        </h1>
+
+        <p class="text-lg sm:text-xl text-muted max-w-xl mx-auto lg:mx-0 mb-10 leading-relaxed">
+          TBook TUI is a premium book reader for EPUB, PDF, Markdown and plain text. Vim keys, syntax highlighting, AI summaries, and a distraction-free Tokyo Night interface.
+        </p>
+
+        <div class="flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-4 mb-12">
+          <a href="#install" class="btn-primary">
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Install with Bun
+          </a>
+          <a href="#features" class="btn-secondary">Explore features</a>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-center lg:justify-start gap-6 text-sm text-muted font-mono">
+          <span class="flex items-center gap-2"><span class="text-cyan">◆</span> EPUB</span>
+          <span class="flex items-center gap-2"><span class="text-purple">▶</span> PDF</span>
+          <span class="flex items-center gap-2"><span class="text-pink">✦</span> Markdown</span>
+          <span class="flex items-center gap-2"><span class="text-blue">●</span> Plain text</span>
+        </div>
+      </div>
+
+      <!-- Terminal mockup -->
+      <div class="w-full max-w-xl mx-auto lg:mx-0">
+        <div class="terminal glow-cyan">
+          <div class="terminal-header">
+            <div class="terminal-dot red"></div>
+            <div class="terminal-dot yellow"></div>
+            <div class="terminal-dot green"></div>
+            <span class="ml-3 text-xs text-muted font-mono">tbook-tui</span>
+          </div>
+          <div class="terminal-body">
+            <div class="text-muted mb-4">$ bun add -g iredox-tbook-tui</div>
+            <div class="text-muted mb-4">$ tbook-tui</div>
+            <div class="text-center py-6">
+              <div class="text-2xl font-bold gradient-text mb-2 tracking-tight">TBOOK</div>
+              <div class="text-sm text-muted mb-6">Terminal Book Reader — Reimagined</div>
+              <div class="grid grid-cols-4 gap-2 text-xs mb-6 max-w-xs mx-auto">
+                <div class="bg-surface rounded px-2 py-2 border border-border-normal/30">
+                  <div class="text-cyan font-bold">15</div>
+                  <div class="text-subtle">Library</div>
+                </div>
+                <div class="bg-surface rounded px-2 py-2 border border-border-normal/30">
+                  <div class="text-purple font-bold">6</div>
+                  <div class="text-subtle">Started</div>
+                </div>
+                <div class="bg-surface rounded px-2 py-2 border border-border-normal/30">
+                  <div class="text-cyan font-bold">7.6k</div>
+                  <div class="text-subtle">Today</div>
+                </div>
+                <div class="bg-surface rounded px-2 py-2 border border-border-normal/30">
+                  <div class="text-pink font-bold">2d</div>
+                  <div class="text-subtle">Streak</div>
+                </div>
+              </div>
+              <div class="text-left max-w-xs mx-auto space-y-1 text-sm">
+                <div class="text-cyan">▶ Continue: the confidence gap</div>
+                <div class="text-muted">✦ Open Library</div>
+                <div class="text-muted">⟳ Import Books</div>
+                <div class="text-muted">◈ Reading Stats</div>
+              </div>
+            </div>
+            <div class="text-subtle text-xs mt-4">Press q to quit · ? for help · j/k to navigate</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scroll hint -->
+  <div class="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 text-muted text-xs animate-bounce">
+    <span>Scroll to explore</span>
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+  </div>
+</section>

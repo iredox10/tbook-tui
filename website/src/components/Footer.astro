@@ -1,0 +1,38 @@
+---
+const links = [
+  { label: "Features", href: "#features" },
+  { label: "Install", href: "#install" },
+  { label: "FAQ", href: "#faq" },
+];
+---
+
+<footer class="border-t border-border-normal/30 py-12 mt-12">
+  <div class="container">
+    <div class="flex flex-col md:flex-row items-center justify-between gap-6">
+      <div class="flex items-center gap-3">
+        <span class="text-2xl font-bold font-mono gradient-text">TBOOK</span>
+        <span class="text-sm text-muted">Terminal Book Reader</span>
+      </div>
+
+      <nav class="flex items-center gap-8">
+        {links.map((link) => (
+          <a href={link.href} class="text-sm text-muted hover:text-bright transition-colors">
+            {link.label}
+          </a>
+        ))}
+        <a
+          href="https://www.npmjs.com/package/iredox-tbook-tui"
+          target="_blank"
+          rel="noopener"
+          class="text-sm text-muted hover:text-bright transition-colors"
+        >
+          npm
+        </a>
+      </nav>
+
+      <p class="text-xs text-subtle">
+        MIT License · Built with OpenTUI & Astro
+      </p>
+    </div>
+  </div>
+</footer>

@@ -1,0 +1,105 @@
+---
+const featureGroups = [
+  {
+    title: "Core Reading",
+    color: "cyan",
+    features: [
+      { icon: "📚", title: "Multi-format support", desc: "Read EPUB, PDF, Markdown and plain text books natively." },
+      { icon: "🔖", title: "Library management", desc: "SQLite-backed library with search, sorting and progress tracking." },
+      { icon: "📍", title: "Reading progress", desc: "Automatic save/resume with per-book chapter tracking." },
+      { icon: "⌨️", title: "Vim keybinds", desc: "j/k scroll, h/l chapters, g/G jump, space page-down." },
+    ],
+  },
+  {
+    title: "Programming Books",
+    color: "purple",
+    features: [
+      { icon: "🎨", title: "Syntax highlighting", desc: "Auto-detects 10+ languages with proper terminal colors." },
+      { icon: "📦", title: "Code blocks", desc: "Bordered boxes with language labels, line numbers and focus mode." },
+      { icon: "📋", title: "Copy to clipboard", desc: "Copy code blocks or selected text with OSC 52 support." },
+      { icon: "📌", title: "Callouts", desc: "Tip, Warning, Note and Important admonitions with sidebars." },
+    ],
+  },
+  {
+    title: "Premium UI",
+    color: "pink",
+    features: [
+      { icon: "🌙", title: "Tokyo Night themes", desc: "Dark and light modes with a single key toggle." },
+      { icon: "🔍", title: "Full-text search", desc: "Search inside any book with context snippets." },
+      { icon: "🗺️", title: "Visual minimap", desc: "Structural sidebar showing your scroll position." },
+      { icon: "🔊", title: "Text-to-speech", desc: "Read chapters or selected paragraphs aloud natively." },
+    ],
+  },
+  {
+    title: "AI & Utilities",
+    color: "blue",
+    features: [
+      { icon: "🤖", title: "AI assistant", desc: "Summarize chapters or explain selections with Ollama or OpenAI." },
+      { icon: "📝", title: "Annotations", desc: "Highlights, bookmarks, dictionary lookup and vocabulary tracking." },
+      { icon: "📤", title: "Export notes", desc: "Send annotations to Obsidian or Logseq as markdown." },
+      { icon: "📊", title: "Reading stats", desc: "Daily word counts, session tracking and streak counter." },
+    ],
+  },
+];
+
+const colorMap: Record<string, string> = {
+  cyan: "text-cyan border-cyan/20 hover:border-cyan/50",
+  purple: "text-purple border-purple/20 hover:border-purple/50",
+  pink: "text-pink border-pink/20 hover:border-pink/50",
+  blue: "text-blue border-blue/20 hover:border-blue/50",
+};
+
+const glowMap: Record<string, string> = {
+  cyan: "shadow-cyan/10",
+  purple: "shadow-purple/10",
+  pink: "shadow-pink/10",
+  blue: "shadow-blue/10",
+};
+---
+
+<section id="features" class="section">
+  <div class="container">
+    <div class="text-center max-w-2xl mx-auto mb-16">
+      <p class="text-sm font-mono text-blue mb-3">FEATURES</p>
+      <h2 class="text-4xl sm:text-5xl font-bold mb-5">Everything a terminal reader needs</h2>
+      <p class="text-muted text-lg">
+        Built for developers, writers and anyone who wants a calm, keyboard-driven reading experience without leaving the terminal.
+      </p>
+    </div>
+
+    <div class="space-y-16">
+      {featureGroups.map((group, i) => (
+        <div class="reveal">
+          <h3 class={`text-xl font-mono font-semibold mb-6 flex items-center gap-3 ${colorMap[group.color].split(" ")[0]}`}>
+            <span class="w-8 h-px bg-current opacity-40"></span>
+            {group.title}
+          </h3>
+          <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-5">
+            {group.features.map((feature) => (
+              <div class={`feature-card bg-card border rounded-xl p-6 ${colorMap[group.color]} ${glowMap[group.color]}`}>
+                <div class="text-2xl mb-4">{feature.icon}</div>
+                <h4 class="text-lg font-semibold mb-2 text-bright">{feature.title}</h4>
+                <p class="text-muted text-sm leading-relaxed">{feature.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+</section>
+
+<script>
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("visible");
+        }
+      });
+    },
+    { threshold: 0.1, rootMargin: "0px 0px -50px 0px" }
+  );
+
+  document.querySelectorAll(".reveal").forEach((el) => observer.observe(el));
+</script>
