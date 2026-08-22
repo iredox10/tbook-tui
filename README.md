@@ -214,6 +214,22 @@ brew install tesseract
 | `Esc` | Cancel import / close filter |
 | `q` | Back to library |
 
+## 👆 Touch & Mouse Gestures
+
+Touch input works on any terminal that translates touch to SGR mouse events; a regular mouse works too. Toggle via `mouseEnabled` in `~/.tbook/config.json`.
+
+| Gesture | Where | Action |
+|---------|-------|--------|
+| One-finger drag | Lists, reader, modals | Scroll / pan |
+| Long-press + drag | Reader | Select text |
+| Tap | Lists & modals | Open / select item; tap backdrop closes modal |
+| Tap left/right third | Reader | Page up / down |
+| Double-tap | Reader | Cycle text zoom |
+| Swipe ← / → | Reader | Previous / next chapter |
+| Tap | RSVP reader | Pause / resume |
+| Swipe ↑ / ↓ | RSVP reader | Speed −/+ 50 WPM |
+| Swipe ← / → | RSVP reader | Seek ∓10 words |
+
 ## 📁 Architecture
 
 ```

@@ -8,6 +8,7 @@ import {
     t, bold, fg,
 } from "@opentui/core"
 import { theme } from "../utils/theme"
+import { enableTouchScroll } from "../utils/touch"
 
 export class HelpOverlay {
     private renderer: CliRenderer
@@ -169,6 +170,17 @@ export class HelpOverlay {
                 ],
             },
             {
+                title: "👆 Touch / Mouse",
+                keys: [
+                    ["Drag", "Scroll (one-finger pan)"],
+                    ["Long-press + drag", "Select text (reader)"],
+                    ["Tap left/right edge", "Page up / down (reader)"],
+                    ["Double-tap", "Zoom text wider (reader)"],
+                    ["Swipe ← / →", "Previous / next chapter (reader)"],
+                    ["Tap item", "Open / select list entry"],
+                ],
+            },
+            {
                 title: "🌐 Global",
                 keys: [
                     ["?", "Toggle this help"],
@@ -194,6 +206,9 @@ export class HelpOverlay {
         }
 
         this.container.add(scrollArea)
+
+        // Touch: drag-to-scroll the shortcut list.
+        enableTouchScroll(scrollArea, { renderer: this.renderer })
 
         // Footer (fixed)
         this.container.add(new TextRenderable(this.renderer, {

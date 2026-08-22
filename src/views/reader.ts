@@ -4,7 +4,7 @@
 //            export, dictionary, config, mouse
 // ─────────────────────────────────────────────────────────────
 
-import type { CliRenderer } from "@opentui/core"
+import type { CliRenderer, MouseEvent } from "@opentui/core"
 import {
     BoxRenderable, TextRenderable, ScrollBoxRenderable,
     CliRenderEvents,
@@ -331,10 +331,15 @@ export class ReaderView {
 
         this.readingPane.focus()
 
-        // Touch: one-finger drag = scroll; long-press (350ms) = select text.
+        // Touch: one-finger drag = scroll; long-press (350ms) = select text;
+        // tap left/right edge = page turn; swipe ←/→ = chapter nav;
+        // double-tap = cycle text zoom.
         enableTouchScroll(this.readingPane, {
             renderer: this.renderer,
             enableLongPressSelect: true,
+            onTap: (e) => this.handlePaneTap(e),
+            onDoubleTap: () => this.handlePaneDoubleTap(),
+            onSwipe: (dir) => this.navigateChapter(dir === "left" ? 1 : -1),
         })
         // Touch: sidebar drag = scroll (chapter list may overflow).
         enableTouchScroll(this.sidebar)
@@ -712,7 +717,34 @@ export class ReaderView {
         }
     }
 
-    // ── Chapter navigation ──────────────────────────────────────
+    // ── Touch gestures ──────────────────────────────────────────
+
+    /** Tap zones: left third = page up, right third = page down. */
+    private handlePaneTap(e: MouseEvent) {
+        const pane = this.readingPane as any
+        const sx = pane.screenX as number | undefined
+        const w = pane.width as number | undefined
+        if (typeof sx !== "number" || typeof w !== "number" || w < 6) return
+        const relX = e.x - sx
+        if (relX < w / 3) {
+            this.pageTurn(-1)
+        } else if (relX > (2 * w) / 3) {
+            this.pageTurn(1)
+        }
+    }
+
+    private pageTurn(dir: number) {
+        const vp = (this.readingPane.viewport?.height ?? 20) as number
+        this.readingPane.scrollBy(dir * Math.max(4, vp - 3))
+    }
+
+    /** Double-tap cycles text zoom wider, wrapping back to compact at max. */
+    private handlePaneDoubleTap() {
+        const delta = this.zoomIndex >= ZOOM_LEVELS.length - 1 ? -(ZOOM_LEVELS.length - 1) : 1
+        this.adjustZoom(delta)
+    }
+
+    // ── Chapter navigation ───────────────────────────────────────
 
     private navigateChapter(delta: number) {
         const th = getTheme()

@@ -2,6 +2,7 @@ import type { CliRenderer } from "@opentui/core"
 import { BoxRenderable, TextRenderable, ScrollBoxRenderable, t, bold, italic, fg } from "@opentui/core"
 import { theme } from "../utils/theme"
 import { askAi } from "../services/ai"
+import { enableTouchScroll } from "../utils/touch"
 
 export class AiModal {
     private renderer: CliRenderer
@@ -69,6 +70,9 @@ export class AiModal {
             },
         })
         this.container.add(this.resultBox)
+
+        // Touch: drag-to-scroll the AI response.
+        enableTouchScroll(this.resultBox, { renderer: this.renderer })
 
         // Footer
         this.container.add(new TextRenderable(this.renderer, {

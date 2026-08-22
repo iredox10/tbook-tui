@@ -2,6 +2,7 @@ import type { CliRenderer } from "@opentui/core"
 import { BoxRenderable, TextRenderable, ScrollBoxRenderable, t, bold, fg } from "@opentui/core"
 import { theme } from "../utils/theme"
 import { showToast } from "./toast"
+import { enableTouchScroll } from "../utils/touch"
 
 export class CodeModal {
     private renderer: CliRenderer
@@ -77,6 +78,9 @@ export class CodeModal {
             fg: theme.text.body,
         })
         this.codeBox.add(textNode)
+
+        // Touch: drag-to-scroll the code block (both axes via wheel/drag).
+        enableTouchScroll(this.codeBox, { renderer: this.renderer })
 
         // Footer
         this.container.add(new TextRenderable(this.renderer, {

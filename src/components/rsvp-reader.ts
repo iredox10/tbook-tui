@@ -8,6 +8,7 @@ import {
     t, bold, fg,
 } from "@opentui/core"
 import { theme } from "../utils/theme"
+import { enableGestures } from "../utils/touch"
 
 export class RsvpReader {
     private renderer: CliRenderer
@@ -76,10 +77,35 @@ export class RsvpReader {
         // Help text
         this.container.add(new TextRenderable(this.renderer, {
             id: "rsvp-help",
-            content: t`${fg(theme.text.subtle)("Space Pause · +/- Speed · q Quit")}`,
+            content: t`${fg(theme.text.subtle)("Tap Pause · Swipe ↑↓ Speed · Swipe ←→ Seek · q Quit")}`,
         }))
 
         this.renderer.root.add(this.container)
+
+        // Touch: tap = pause/resume; swipe ↑/↓ = speed; swipe ←/→ = seek words.
+        enableGestures(this.container, {
+            onTap: () => {
+                if (this.running) {
+                    this.stop()
+                } else if (this.wordIndex < this.words.length - 1) {
+                    this.start()
+                }
+                this.updateInfo()
+            },
+            onSwipe: (dir) => {
+                if (dir === "up") {
+                    this.wpm = Math.min(this.wpm + 50, 1500)
+                } else if (dir === "down") {
+                    this.wpm = Math.max(this.wpm - 50, 50)
+                } else {
+                    const step = dir === "right" ? 10 : -10
+                    this.wordIndex = Math.max(0, Math.min(this.words.length - 1, this.wordIndex + step))
+                    this.updateWord()
+                }
+                if (this.running) { this.stop(); this.start() }
+                this.updateInfo()
+            },
+        })
 
         // Input handler
         this.inputHandler = (seq: string) => {

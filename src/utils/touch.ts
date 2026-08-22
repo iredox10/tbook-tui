@@ -4,23 +4,61 @@
 // Most modern terminals translate touch → mouse events via the SGR
 // protocol (touch-drag = mouse drag, tap = click, two-finger = wheel).
 // OpenTUI's ScrollBox already handles wheel natively; these helpers add:
-//   - enableTouchScroll:  one-finger drag-to-pan (+ optional long-press-select)
+//   - enableTouchScroll:  one-finger drag-to-pan (+ optional long-press-select,
+//                         swipe, double-tap)
 //   - enableTap:          tap-to-activate on a single renderable (list rows)
 //   - enableSelectTap:    tap-to-select-item on a SelectRenderable
+//   - enableGestures:     tap/double-tap/swipe on any renderable
+// All helpers respect the `mouseEnabled` config flag (gated here centrally).
 // ─────────────────────────────────────────────────────────────
 
 import type { CliRenderer, MouseEvent, Renderable, ScrollBoxRenderable, SelectRenderable } from "@opentui/core"
+import { loadConfig } from "../services/config"
 
 const LONG_PRESS_MS = 350
 const TAP_MOVE_THRESHOLD = 4
 const TAP_MAX_MS = 600
+const SWIPE_MIN_DISTANCE = 15      // columns before a drag counts as a swipe
+const SWIPE_DOMINANCE = 1.5        // horizontal must exceed vertical by this ratio
+const DOUBLE_TAP_MS = 300
+const DOUBLE_TAP_PX = 8
+const SINGLE_TAP_DELAY_MS = 280    // deferred so double-tap can cancel it
+
+// ── Global touch gate (config.mouseEnabled) ─────────────────
+
+let touchOverride: boolean | null = null
+
+/** Force touch on/off at runtime (overrides config until cleared). */
+export function setTouchEnabled(enabled: boolean): void {
+    touchOverride = enabled
+}
+
+/** Drop any runtime override; fall back to config.mouseEnabled. */
+export function clearTouchOverride(): void {
+    touchOverride = null
+}
+
+/** True when touch/pointer gestures should respond (respects config). */
+export function isTouchEnabled(): boolean {
+    if (touchOverride !== null) return touchOverride
+    try {
+        return loadConfig().mouseEnabled !== false
+    } catch {
+        return true
+    }
+}
 
 export interface TouchScrollOptions {
     renderer?: CliRenderer
     /** Enable long-press → native text selection (reader body only). */
     enableLongPressSelect?: boolean
-    /** Called on a tap (down→up, no drag) anywhere on the scroll area. */
+    /** Called on a tap (down→up, no drag) anywhere on the scroll area.
+     *  Deferred ~280ms when onDoubleTap is set, so a second tap can upgrade it. */
     onTap?: (e: MouseEvent) => void
+    /** Called when two quick taps land close together. */
+    onDoubleTap?: (e: MouseEvent) => void
+    /** Called when a horizontal-dominant drag exceeds the swipe threshold. */
+    onSwipe?: (dir: "left" | "right") => void
 }
 
 /**
@@ -45,8 +83,14 @@ export function enableTouchScroll(scrollBox: ScrollBoxRenderable, opts: TouchScr
     let timer: ReturnType<typeof setTimeout> | null = null
     let armedTarget: Renderable | null = null
     let armedDragged = false
+    // Double-tap detection
+    let tapTimer: ReturnType<typeof setTimeout> | null = null
+    let lastTapTime = 0
+    let lastTapX = 0
+    let lastTapY = 0
 
     scrollBox.onMouseDown = (e: MouseEvent) => {
+        if (!isTouchEnabled()) return
         if (e.button !== 0) return
         // Neutralize any text-selection the renderer auto-started on `down`
         // over selectable text, so a subsequent drag pans instead of selecting.
@@ -78,6 +122,7 @@ export function enableTouchScroll(scrollBox: ScrollBoxRenderable, opts: TouchScr
     }
 
     scrollBox.onMouseDrag = (e: MouseEvent) => {
+        if (!isTouchEnabled()) return
         if (e.button !== 0) return
         if (mode === "select") {
             armedDragged = true
@@ -102,15 +147,24 @@ export function enableTouchScroll(scrollBox: ScrollBoxRenderable, opts: TouchScr
     }
 
     scrollBox.onMouseUp = (e: MouseEvent) => {
+        if (!isTouchEnabled()) return
         if (timer) {
             clearTimeout(timer)
             timer = null
         }
         if (mode === "pending") {
+            const dx = e.x - downX
+            const dy = e.y - downY
             const moved =
-                Math.abs(e.x - downX) > TAP_MOVE_THRESHOLD ||
-                Math.abs(e.y - downY) > TAP_MOVE_THRESHOLD
-            if (!moved && opts.onTap) opts.onTap(e)
+                Math.abs(dx) > TAP_MOVE_THRESHOLD ||
+                Math.abs(dy) > TAP_MOVE_THRESHOLD
+            if (!moved) {
+                handleTap(e)
+            } else {
+                // No drag events arrived (terminal sends press+release only):
+                // treat the release delta as a pan, or a horizontal swipe.
+                resolveGesture(dx, dy, true)
+            }
         } else if (mode === "select") {
             if (!armedDragged && opts.renderer) {
                 try { opts.renderer.clearSelection() } catch { }
@@ -119,8 +173,152 @@ export function enableTouchScroll(scrollBox: ScrollBoxRenderable, opts: TouchScr
                 armedTarget.selectable = false
                 armedTarget = null
             }
+        } else if (mode === "scroll") {
+            // Horizontal-dominant drag past the threshold = chapter swipe.
+            // (Vertical panning was already applied live during onMouseDrag.)
+            resolveGesture(e.x - downX, e.y - downY, false)
         }
         mode = "idle"
+    }
+
+    /** Swipe / pan resolution shared by drag-end and release-only terminals. */
+    function resolveGesture(dx: number, dy: number, allowPan: boolean) {
+        const adx = Math.abs(dx)
+        const ady = Math.abs(dy)
+        if (opts.onSwipe && adx >= SWIPE_MIN_DISTANCE && adx > ady * SWIPE_DOMINANCE) {
+            opts.onSwipe(dx < 0 ? "left" : "right")
+            return
+        }
+        // Terminals that send only press + release (no motion events during a
+        // touch swipe) never reach onMouseDrag — apply the whole delta here.
+        if (allowPan && ady >= TAP_MOVE_THRESHOLD) {
+            scrollBox.scrollBy(-dy)
+        }
+    }
+
+    function handleTap(e: MouseEvent) {
+        if (!opts.onTap) return
+        if (!opts.onDoubleTap) {
+            opts.onTap(e)
+            return
+        }
+        // Double-tap detection: defer the single tap briefly so a second
+        // tap can upgrade it into a double-tap instead.
+        const now = Date.now()
+        const near =
+            Math.abs(e.x - lastTapX) <= DOUBLE_TAP_PX &&
+            Math.abs(e.y - lastTapY) <= DOUBLE_TAP_PX
+        if (near && now - lastTapTime <= DOUBLE_TAP_MS) {
+            lastTapTime = 0
+            if (tapTimer) {
+                clearTimeout(tapTimer)
+                tapTimer = null
+            }
+            opts.onDoubleTap(e)
+        } else {
+            lastTapTime = now
+            lastTapX = e.x
+            lastTapY = e.y
+            if (tapTimer) clearTimeout(tapTimer)
+            tapTimer = setTimeout(() => {
+                tapTimer = null
+                opts.onTap!(e)
+            }, SINGLE_TAP_DELAY_MS)
+        }
+    }
+}
+
+// ── Generic gestures (any renderable) ───────────────────────
+
+export interface GestureOptions {
+    onTap?: () => void
+    onDoubleTap?: () => void
+    onSwipe?: (dir: "left" | "right" | "up" | "down") => void
+}
+
+/**
+ * Attach tap / double-tap / swipe detection to any renderable that isn't a
+ * ScrollBox (e.g. the full-screen RSVP overlay). Target's children should be
+ * non-interactive so events reach it.
+ */
+export function enableGestures(target: Renderable, opts: GestureOptions) {
+    let downX = 0
+    let downY = 0
+    let downTime = 0
+    let dragging = false
+    // Double-tap detection
+    let tapTimer: ReturnType<typeof setTimeout> | null = null
+    let lastTapTime = 0
+    let lastTapX = 0
+    let lastTapY = 0
+
+    target.onMouseDown = (e: MouseEvent) => {
+        if (!isTouchEnabled()) return
+        if (e.button !== 0) return
+        downX = e.x
+        downY = e.y
+        downTime = Date.now()
+        dragging = false
+    }
+    target.onMouseDrag = (e: MouseEvent) => {
+        if (!isTouchEnabled()) return
+        if (e.button !== 0) return
+        if (
+            Math.abs(e.x - downX) > TAP_MOVE_THRESHOLD ||
+            Math.abs(e.y - downY) > TAP_MOVE_THRESHOLD
+        ) {
+            dragging = true
+        }
+    }
+    target.onMouseUp = (e: MouseEvent) => {
+        if (!isTouchEnabled()) return
+        if (e.button !== 0) return
+        const elapsed = Date.now() - downTime
+        const dx = e.x - downX
+        const dy = e.y - downY
+        const adx = Math.abs(dx)
+        const ady = Math.abs(dy)
+
+        // Swipe from either live drags OR press+release terminals (no motion
+        // events during the swipe). Distance is what matters, not dragging.
+        if (opts.onSwipe && elapsed <= TAP_MAX_MS * 4 &&
+            (adx >= SWIPE_MIN_DISTANCE || ady >= SWIPE_MIN_DISTANCE)) {
+            if (adx > ady * SWIPE_DOMINANCE) {
+                opts.onSwipe(dx < 0 ? "left" : "right")
+                return
+            }
+            if (ady > adx * SWIPE_DOMINANCE) {
+                opts.onSwipe(dy < 0 ? "up" : "down")
+                return
+            }
+        }
+        if (dragging) return
+        if (elapsed > TAP_MAX_MS) return
+        if (!opts.onTap) return
+        if (!opts.onDoubleTap) {
+            opts.onTap()
+            return
+        }
+        const near =
+            Math.abs(e.x - lastTapX) <= DOUBLE_TAP_PX &&
+            Math.abs(e.y - lastTapY) <= DOUBLE_TAP_PX
+        if (near && Date.now() - lastTapTime <= DOUBLE_TAP_MS) {
+            lastTapTime = 0
+            if (tapTimer) {
+                clearTimeout(tapTimer)
+                tapTimer = null
+            }
+            opts.onDoubleTap()
+        } else {
+            lastTapTime = Date.now()
+            lastTapX = e.x
+            lastTapY = e.y
+            if (tapTimer) clearTimeout(tapTimer)
+            tapTimer = setTimeout(() => {
+                tapTimer = null
+                opts.onTap!()
+            }, SINGLE_TAP_DELAY_MS)
+        }
     }
 }
 
@@ -137,6 +335,7 @@ export function enableTap(target: Renderable, onTap: () => void) {
     let dragging = false
 
     target.onMouseDown = (e: MouseEvent) => {
+        if (!isTouchEnabled()) return
         if (e.button !== 0) return
         downX = e.x
         downY = e.y
@@ -144,6 +343,7 @@ export function enableTap(target: Renderable, onTap: () => void) {
         dragging = false
     }
     target.onMouseDrag = (e: MouseEvent) => {
+        if (!isTouchEnabled()) return
         if (e.button !== 0) return
         if (
             Math.abs(e.x - downX) > TAP_MOVE_THRESHOLD ||
@@ -153,6 +353,7 @@ export function enableTap(target: Renderable, onTap: () => void) {
         }
     }
     target.onMouseUp = (e: MouseEvent) => {
+        if (!isTouchEnabled()) return
         if (e.button !== 0) return
         if (dragging) return
         if (Date.now() - downTime > TAP_MAX_MS) return
@@ -172,16 +373,19 @@ export function enableSelectTap(select: SelectRenderable) {
     let dragging = false
 
     select.onMouseDown = (e: MouseEvent) => {
+        if (!isTouchEnabled()) return
         if (e.button !== 0) return
         downY = e.y
         downTime = Date.now()
         dragging = false
     }
     select.onMouseDrag = (e: MouseEvent) => {
+        if (!isTouchEnabled()) return
         if (e.button !== 0) return
         if (Math.abs(e.y - downY) > TAP_MOVE_THRESHOLD) dragging = true
     }
     select.onMouseUp = (e: MouseEvent) => {
+        if (!isTouchEnabled()) return
         if (e.button !== 0) return
         if (dragging) return
         if (Date.now() - downTime > TAP_MAX_MS) return
