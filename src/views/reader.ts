@@ -35,6 +35,7 @@ import { TTSService } from "../services/tts"
 import { renderImageToTerminal, supportsImages } from "../utils/terminal-image"
 import { renderParagraph } from "../utils/render-paragraph"
 import { enableTouchScroll, enableTap } from "../utils/touch"
+import { createTouchButton } from "../components/touch-button"
 import { exportBook, exportReadingSessionToObsidian } from "../services/export"
 import { loadConfig, updateConfig } from "../services/config"
 import { posix as pathPosix } from "path"
@@ -102,6 +103,7 @@ export class ReaderView {
     private minimapContent!: TextRenderable
     private minimapInterval: Timer | null = null
     private statusBarMounted = false
+    private touchBar!: BoxRenderable
 
     private inputHandler?: (sequence: string) => boolean
     private destroyed = false
@@ -343,6 +345,91 @@ export class ReaderView {
         })
         // Touch: sidebar drag = scroll (chapter list may overflow).
         enableTouchScroll(this.sidebar)
+
+        // ── Touch action bar (sits just above the status bar) ──
+        this.touchBar = new BoxRenderable(this.renderer, {
+            id: "reader-touch-bar",
+            position: "absolute",
+            bottom: 1,
+            left: 0,
+            width: "100%",
+            height: 1,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 1,
+            paddingLeft: 1,
+            backgroundColor: th.bg.surface,
+        })
+        this.touchBar.add(createTouchButton({
+            renderer: this.renderer,
+            id: "reader-btn-toc",
+            label: "TOC",
+            icon: "☰",
+            accent: th.accent.blue,
+            onTap: () => this.showToc(),
+        }))
+        this.touchBar.add(createTouchButton({
+            renderer: this.renderer,
+            id: "reader-btn-search",
+            label: "",
+            icon: "🔍",
+            onTap: () => this.showSearch(),
+        }))
+        this.touchBar.add(createTouchButton({
+            renderer: this.renderer,
+            id: "reader-btn-bookmark",
+            label: "",
+            icon: "🔖",
+            accent: th.accent.amber,
+            onTap: () => this.saveBookmark(),
+        }))
+        this.touchBar.add(createTouchButton({
+            renderer: this.renderer,
+            id: "reader-btn-select",
+            label: "",
+            icon: "✎",
+            accent: th.accent.green,
+            onTap: () => this.enterSelectMode(),
+        }))
+        this.touchBar.add(createTouchButton({
+            renderer: this.renderer,
+            id: "reader-btn-autoscroll",
+            label: "",
+            icon: "▶",
+            onTap: () => this.toggleAutoScroll(),
+        }))
+        this.touchBar.add(createTouchButton({
+            renderer: this.renderer,
+            id: "reader-btn-tts",
+            label: "",
+            icon: "🔊",
+            accent: th.accent.purple,
+            onTap: () => this.toggleTTS(),
+        }))
+        this.touchBar.add(createTouchButton({
+            renderer: this.renderer,
+            id: "reader-btn-ai",
+            label: "AI",
+            icon: "✨",
+            accent: th.accent.pink,
+            onTap: () => this.showAiSummarize(),
+        }))
+        this.touchBar.add(createTouchButton({
+            renderer: this.renderer,
+            id: "reader-btn-help",
+            label: "",
+            icon: "❔",
+            onTap: () => this.showHelp(),
+        }))
+        this.touchBar.add(createTouchButton({
+            renderer: this.renderer,
+            id: "reader-btn-back",
+            label: "Library",
+            icon: "←",
+            accent: th.text.muted,
+            onTap: () => this.quitToLibrary(),
+        }))
+        this.renderer.root.add(this.touchBar)
 
         // Phase 4: Listen for text selection events
         this.renderer.on(CliRenderEvents.SELECTION, () => {
@@ -1221,8 +1308,7 @@ export class ReaderView {
 
                 // Bookmark (save)
                 case "b":
-                    addBookmark(this.book.id, this.currentChapter, this.readingPane.scrollTop, "")
-                    showToast(this.renderer, "🔖 Bookmark saved", "success")
+                    this.saveBookmark()
                     return true
 
                 // Select mode — inline word picker
@@ -1317,11 +1403,7 @@ export class ReaderView {
 
                 // Quit
                 case "q":
-                    if (this.timerInterval) clearInterval(this.timerInterval)
-                    this.saveScrollPosition()
-                    this.recordSessionStats()
-                    this.stopAutoScroll()
-                    this.app.showLibrary()
+                    this.quitToLibrary()
                     return true
             }
             return false
@@ -1479,6 +1561,7 @@ export class ReaderView {
                 try { this.statusBar.destroy() } catch { }
                 this.statusBarMounted = false
             }
+            try { this.touchBar.visible = false } catch { }
             showToast(this.renderer, "🎯 Focus mode ON — press f to restore", "info")
         } else {
             this.sidebarVisible = true
@@ -1488,8 +1571,24 @@ export class ReaderView {
             this.statusBarMounted = true
             this.statusBar.setMode("reader")
             this.updateStatusProgress()
+            try { this.touchBar.visible = true } catch { }
             showToast(this.renderer, "📖 Focus mode OFF", "info")
         }
+    }
+
+    /** Bookmark current position (keybind `b` and touch bar). */
+    private saveBookmark() {
+        addBookmark(this.book.id, this.currentChapter, this.readingPane.scrollTop, "")
+        showToast(this.renderer, "🔖 Bookmark saved", "success")
+    }
+
+    /** Save progress and return to the library (keybind `q` and touch bar). */
+    private quitToLibrary() {
+        if (this.timerInterval) clearInterval(this.timerInterval)
+        this.saveScrollPosition()
+        this.recordSessionStats()
+        this.stopAutoScroll()
+        this.app.showLibrary()
     }
 
     private showRsvp() {
@@ -2797,6 +2896,9 @@ export class ReaderView {
         if (this.statusBarMounted) {
             try { this.statusBar.destroy() } catch { }
             this.statusBarMounted = false
+        }
+        if (this.touchBar) {
+            try { this.renderer.root.remove(this.touchBar.id) } catch { }
         }
         try { this.renderer.root.remove(this.container.id) } catch { }
     }

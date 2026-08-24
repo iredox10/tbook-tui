@@ -12,6 +12,7 @@ import { theme, progressBar, progressColor, truncate, relativeTime } from "../ut
 import { enableTouchScroll, enableTap } from "../utils/touch"
 import { getAllBooks, deleteBook, type BookRecord } from "../services/database"
 import { StatusBar } from "../components/status-bar"
+import { createTouchButton } from "../components/touch-button"
 import { showToast } from "../components/toast"
 import { HelpOverlay } from "../components/help-overlay"
 import type { App } from "../app"
@@ -27,6 +28,7 @@ export class LibraryView {
     private selectedIndex = 0
     private searchMode = false
     private searchInput?: InputRenderable
+    private searchContainer!: BoxRenderable
     private cardRenderables: BoxRenderable[] = []
     private helpOverlay: HelpOverlay | null = null
     private helpOpen = false
@@ -79,6 +81,64 @@ export class LibraryView {
         header.add(titleText)
         header.add(countText)
 
+        // ── Touch action toolbar (keyboard-equivalent commands) ──
+        const toolbar = new BoxRenderable(this.renderer, {
+            id: "library-toolbar",
+            width: "100%",
+            height: 1,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 1,
+            paddingLeft: 2,
+            backgroundColor: theme.bg.void,
+        })
+        toolbar.add(createTouchButton({
+            renderer: this.renderer,
+            id: "library-btn-open",
+            label: "Open",
+            icon: "⏎",
+            accent: theme.accent.blue,
+            onTap: () => this.openSelectedBook(),
+        }))
+        toolbar.add(createTouchButton({
+            renderer: this.renderer,
+            id: "library-btn-search",
+            label: "Search",
+            icon: "🔍",
+            onTap: () => this.toggleSearch(true),
+        }))
+        toolbar.add(createTouchButton({
+            renderer: this.renderer,
+            id: "library-btn-import",
+            label: "Import",
+            icon: "📥",
+            accent: theme.accent.green,
+            onTap: () => this.app.showImport(),
+        }))
+        toolbar.add(createTouchButton({
+            renderer: this.renderer,
+            id: "library-btn-stats",
+            label: "Stats",
+            icon: "📊",
+            accent: theme.accent.purple,
+            onTap: () => this.app.showStats(),
+        }))
+        toolbar.add(createTouchButton({
+            renderer: this.renderer,
+            id: "library-btn-delete",
+            label: "Delete",
+            icon: "🗑",
+            accent: theme.accent.pink,
+            onTap: () => this.deleteSelectedBook(),
+        }))
+        toolbar.add(createTouchButton({
+            renderer: this.renderer,
+            id: "library-btn-help",
+            label: "Help",
+            icon: "❔",
+            onTap: () => this.showHelp(),
+        }))
+
         // ── Search bar (hidden by default) ──
         this.searchInput = new InputRenderable(this.renderer, {
             id: "library-search",
@@ -94,6 +154,7 @@ export class LibraryView {
             id: "library-search-container",
             width: "100%",
             height: 0, // Hidden initially
+            visible: false,
             paddingLeft: 2,
             paddingTop: 0,
             paddingBottom: 0,
@@ -109,6 +170,7 @@ export class LibraryView {
 
         searchContainer.add(searchIcon)
         searchContainer.add(this.searchInput)
+        this.searchContainer = searchContainer
 
         this.searchInput.on(InputRenderableEvents.INPUT, () => {
             this.filterBooks(this.searchInput!.value)
@@ -140,6 +202,7 @@ export class LibraryView {
         // Assemble
         this.container.add(header)
         this.container.add(searchContainer)
+        this.container.add(toolbar)
         this.container.add(this.bookList)
         this.renderer.root.add(this.container)
         this.renderer.root.add(this.statusBar.root)
@@ -425,8 +488,12 @@ export class LibraryView {
         this.searchMode = show
         // We just focus/unfocus the search input
         if (show) {
+            this.searchContainer.visible = true
+            this.searchContainer.height = 1
             this.searchInput?.focus()
         } else {
+            this.searchContainer.visible = false
+            this.searchContainer.height = 0
             this.searchInput!.value = ""
             this.filteredBooks = [...this.books]
             this.selectedIndex = 0

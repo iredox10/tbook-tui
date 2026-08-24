@@ -10,6 +10,7 @@ import {
 } from "@opentui/core"
 import { theme, progressBar, progressColor } from "../utils/theme"
 import { enableTouchScroll } from "../utils/touch"
+import { createTouchButton } from "../components/touch-button"
 import { getWeeklyStats, getWeeklyStatsOffset, getTotalStats, getTodayStats, getSessionHistory } from "../services/database"
 import { loadConfig } from "../services/config"
 import { exportAllAnnotations } from "../services/export"
@@ -71,6 +72,40 @@ export class StatsView {
             content: t`${bold(fg(theme.accent.blue)("📊 Reading Statistics"))}`,
         })
         scrollArea.add(header)
+
+        // ── Touch action row ──
+        const actionRow = new BoxRenderable(this.renderer, {
+            id: "stats-action-row",
+            width: "100%",
+            height: 1,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 1,
+        })
+        actionRow.add(createTouchButton({
+            renderer: this.renderer,
+            id: "stats-btn-export",
+            label: "Export Annotations",
+            icon: "📝",
+            accent: theme.accent.green,
+            onTap: () => {
+                const result = exportAllAnnotations()
+                if (result.success) {
+                    showToast(this.renderer, `📝 Exported ${result.count} annotations to ${result.path}`, "success")
+                } else {
+                    showToast(this.renderer, `Failed: ${result.error}`, "error")
+                }
+            },
+        }))
+        actionRow.add(createTouchButton({
+            renderer: this.renderer,
+            id: "stats-btn-back",
+            label: "Library",
+            icon: "←",
+            accent: theme.text.muted,
+            onTap: () => this.app.showLibrary(),
+        }))
+        scrollArea.add(actionRow)
 
         // ── Reading Goals ──
         const goal = config.readingGoal

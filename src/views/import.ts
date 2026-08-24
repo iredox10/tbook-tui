@@ -10,6 +10,7 @@ import {
 } from "@opentui/core"
 import { theme, truncate, spinnerFrames, progressBar, progressColor } from "../utils/theme"
 import { enableTouchScroll, enableTap } from "../utils/touch"
+import { createTouchButton } from "../components/touch-button"
 import { insertBook, getBookByPath } from "../services/database"
 import { parseEpub } from "../services/epub-parser"
 import { parsePdf, hasPdfSupport } from "../services/pdf-parser"
@@ -241,12 +242,68 @@ export class ImportView {
         })
         this.statusBar.root.add(this.hintText)
 
+        // ── Touch action row (keyboard-equivalent commands) ──
+        const actionRow = new BoxRenderable(this.renderer, {
+            id: "import-action-row",
+            width: "100%",
+            height: 1,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 1,
+            paddingLeft: 2,
+            backgroundColor: theme.bg.void,
+        })
+        actionRow.add(createTouchButton({
+            renderer: this.renderer,
+            id: "import-btn-scan",
+            label: "Scan / Import",
+            icon: "⏎",
+            accent: theme.accent.green,
+            onTap: () => {
+                if (this.importing) return
+                if (this.filteredFiles.length > 0) {
+                    this.importSelected()
+                } else {
+                    const dir = this.pathInput.value.trim()
+                    if (dir) this.scanDirectory(dir)
+                }
+            },
+        }))
+        actionRow.add(createTouchButton({
+            renderer: this.renderer,
+            id: "import-btn-all",
+            label: "Import All",
+            icon: "📄",
+            accent: theme.accent.blue,
+            onTap: () => {
+                if (!this.importing && this.filteredFiles.length > 0) this.importAll()
+            },
+        }))
+        actionRow.add(createTouchButton({
+            renderer: this.renderer,
+            id: "import-btn-filter",
+            label: "Filter",
+            icon: "🔍",
+            onTap: () => this.showSearch(),
+        }))
+        actionRow.add(createTouchButton({
+            renderer: this.renderer,
+            id: "import-btn-back",
+            label: "Back",
+            icon: "←",
+            accent: theme.text.muted,
+            onTap: () => {
+                if (!this.importing) this.app.showLibrary()
+            },
+        }))
+
         this.container.add(header)
         this.container.add(pathRow)
         this.container.add(quickPaths)
         this.container.add(recentRow)
         this.container.add(this.searchRow)
         this.container.add(this.fileList)
+        this.container.add(actionRow)
         this.renderer.root.add(this.container)
 
         // Touch: drag-to-scroll the file list.
