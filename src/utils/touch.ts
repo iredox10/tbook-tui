@@ -14,6 +14,9 @@
 
 import type { CliRenderer, MouseEvent, Renderable, ScrollBoxRenderable, SelectRenderable } from "@opentui/core"
 import { loadConfig } from "../services/config"
+import { appendFileSync } from "fs"
+import { join } from "path"
+import { homedir } from "os"
 
 const LONG_PRESS_MS = 350
 const TAP_MOVE_THRESHOLD = 4
@@ -23,6 +26,8 @@ const SWIPE_DOMINANCE = 1.5        // horizontal must exceed vertical by this ra
 const DOUBLE_TAP_MS = 300
 const DOUBLE_TAP_PX = 8
 const SINGLE_TAP_DELAY_MS = 280    // deferred so double-tap can cancel it
+const PAN_STREAM_MS = 400          // max gap between taps of a swipe stream
+const STREAM_MIN_DELTA = 2         // min drift between taps to count as pan
 
 // ── Global touch gate (config.mouseEnabled) ─────────────────
 
@@ -45,6 +50,22 @@ export function isTouchEnabled(): boolean {
         return loadConfig().mouseEnabled !== false
     } catch {
         return true
+    }
+}
+
+// ── Touch debug logging (TBOOK_TOUCH_DEBUG=1) ───────────────
+
+const TOUCH_DEBUG = !!process.env.TBOOK_TOUCH_DEBUG
+
+function debugLog(handler: string, e: MouseEvent): void {
+    if (!TOUCH_DEBUG) return
+    try {
+        appendFileSync(
+            join(homedir(), ".tbook", "touch-debug.log"),
+            `${Date.now()} [${handler}] type=${e.type} btn=${e.button} x=${e.x} y=${e.y}\n`,
+        )
+    } catch {
+        // ignore logging failures
     }
 }
 
@@ -90,6 +111,7 @@ export function enableTouchScroll(scrollBox: ScrollBoxRenderable, opts: TouchScr
     let lastTapY = 0
 
     scrollBox.onMouseDown = (e: MouseEvent) => {
+        debugLog("enableTouchScroll.onMouseDown", e)
         if (!isTouchEnabled()) return
         if (e.button !== 0) return
         // Neutralize any text-selection the renderer auto-started on `down`
@@ -122,6 +144,7 @@ export function enableTouchScroll(scrollBox: ScrollBoxRenderable, opts: TouchScr
     }
 
     scrollBox.onMouseDrag = (e: MouseEvent) => {
+        debugLog("enableTouchScroll.onMouseDrag", e)
         if (!isTouchEnabled()) return
         if (e.button !== 0) return
         if (mode === "select") {
@@ -147,6 +170,7 @@ export function enableTouchScroll(scrollBox: ScrollBoxRenderable, opts: TouchScr
     }
 
     scrollBox.onMouseUp = (e: MouseEvent) => {
+        debugLog("enableTouchScroll.onMouseUp", e)
         if (!isTouchEnabled()) return
         if (timer) {
             clearTimeout(timer)
@@ -197,14 +221,46 @@ export function enableTouchScroll(scrollBox: ScrollBoxRenderable, opts: TouchScr
     }
 
     function handleTap(e: MouseEvent) {
-        if (!opts.onTap) return
+        const now = Date.now()
+        // Tap-stream panning: some touch terminals sample a swipe as rapid
+        // small press+release pairs (each moving only 1-3 rows). Consecutive
+        // quick taps whose position drifts track the finger — pan by the
+        // delta instead of firing tap/double-tap actions.
+        const sinceLast = now - lastTapTime
+        const driftY = e.y - lastTapY
+        const driftX = Math.abs(e.x - lastTapX)
+        if (
+            lastTapTime > 0 &&
+            sinceLast <= PAN_STREAM_MS &&
+            Math.abs(driftY) >= STREAM_MIN_DELTA &&
+            driftX < SWIPE_MIN_DISTANCE
+        ) {
+            if (tapTimer) {
+                clearTimeout(tapTimer)
+                tapTimer = null
+            }
+            scrollBox.scrollBy(-driftY)
+            lastTapTime = now
+            lastTapX = e.x
+            lastTapY = e.y
+            return
+        }
+        if (!opts.onTap) {
+            // No tap action, but keep tracking for stream detection.
+            lastTapTime = now
+            lastTapX = e.x
+            lastTapY = e.y
+            return
+        }
         if (!opts.onDoubleTap) {
             opts.onTap(e)
+            lastTapTime = now
+            lastTapX = e.x
+            lastTapY = e.y
             return
         }
         // Double-tap detection: defer the single tap briefly so a second
         // tap can upgrade it into a double-tap instead.
-        const now = Date.now()
         const near =
             Math.abs(e.x - lastTapX) <= DOUBLE_TAP_PX &&
             Math.abs(e.y - lastTapY) <= DOUBLE_TAP_PX
@@ -253,6 +309,7 @@ export function enableGestures(target: Renderable, opts: GestureOptions) {
     let lastTapY = 0
 
     target.onMouseDown = (e: MouseEvent) => {
+        debugLog("enableGestures.onMouseDown", e)
         if (!isTouchEnabled()) return
         if (e.button !== 0) return
         downX = e.x
@@ -261,6 +318,7 @@ export function enableGestures(target: Renderable, opts: GestureOptions) {
         dragging = false
     }
     target.onMouseDrag = (e: MouseEvent) => {
+        debugLog("enableGestures.onMouseDrag", e)
         if (!isTouchEnabled()) return
         if (e.button !== 0) return
         if (
@@ -271,6 +329,7 @@ export function enableGestures(target: Renderable, opts: GestureOptions) {
         }
     }
     target.onMouseUp = (e: MouseEvent) => {
+        debugLog("enableGestures.onMouseUp", e)
         if (!isTouchEnabled()) return
         if (e.button !== 0) return
         const elapsed = Date.now() - downTime
@@ -295,6 +354,22 @@ export function enableGestures(target: Renderable, opts: GestureOptions) {
         if (dragging) return
         if (elapsed > TAP_MAX_MS) return
         if (!opts.onTap) return
+        // Part of a swipe-stream (rapid drifting taps) — not a real tap.
+        const now = Date.now()
+        if (
+            lastTapTime > 0 &&
+            now - lastTapTime <= PAN_STREAM_MS &&
+            (Math.abs(e.y - lastTapY) >= STREAM_MIN_DELTA ||
+                Math.abs(e.x - lastTapX) >= STREAM_MIN_DELTA)
+        ) {
+            lastTapTime = now
+            lastTapX = e.x
+            lastTapY = e.y
+            return
+        }
+        lastTapTime = now
+        lastTapX = e.x
+        lastTapY = e.y
         if (!opts.onDoubleTap) {
             opts.onTap()
             return
@@ -333,8 +408,13 @@ export function enableTap(target: Renderable, onTap: () => void) {
     let downY = 0
     let downTime = 0
     let dragging = false
+    // Tap-stream detection (touch terminals that sample swipes as pairs)
+    let lastTapTime = 0
+    let lastTapX = 0
+    let lastTapY = 0
 
     target.onMouseDown = (e: MouseEvent) => {
+        debugLog("enableTap.onMouseDown", e)
         if (!isTouchEnabled()) return
         if (e.button !== 0) return
         downX = e.x
@@ -343,6 +423,7 @@ export function enableTap(target: Renderable, onTap: () => void) {
         dragging = false
     }
     target.onMouseDrag = (e: MouseEvent) => {
+        debugLog("enableTap.onMouseDrag", e)
         if (!isTouchEnabled()) return
         if (e.button !== 0) return
         if (
@@ -353,10 +434,27 @@ export function enableTap(target: Renderable, onTap: () => void) {
         }
     }
     target.onMouseUp = (e: MouseEvent) => {
+        debugLog("enableTap.onMouseUp", e)
         if (!isTouchEnabled()) return
         if (e.button !== 0) return
         if (dragging) return
         if (Date.now() - downTime > TAP_MAX_MS) return
+        // Part of a swipe-stream (rapid drifting taps) — not a real tap.
+        const now = Date.now()
+        if (
+            lastTapTime > 0 &&
+            now - lastTapTime <= PAN_STREAM_MS &&
+            (Math.abs(e.y - lastTapY) >= STREAM_MIN_DELTA ||
+                Math.abs(e.x - lastTapX) >= STREAM_MIN_DELTA)
+        ) {
+            lastTapTime = now
+            lastTapX = e.x
+            lastTapY = e.y
+            return
+        }
+        lastTapTime = now
+        lastTapX = e.x
+        lastTapY = e.y
         onTap()
     }
 }
@@ -371,8 +469,12 @@ export function enableSelectTap(select: SelectRenderable) {
     let downY = 0
     let downTime = 0
     let dragging = false
+    // Tap-stream detection (touch terminals that sample swipes as pairs)
+    let lastTapTime = 0
+    let lastTapY = 0
 
     select.onMouseDown = (e: MouseEvent) => {
+        debugLog("enableSelectTap.onMouseDown", e)
         if (!isTouchEnabled()) return
         if (e.button !== 0) return
         downY = e.y
@@ -380,15 +482,30 @@ export function enableSelectTap(select: SelectRenderable) {
         dragging = false
     }
     select.onMouseDrag = (e: MouseEvent) => {
+        debugLog("enableSelectTap.onMouseDrag", e)
         if (!isTouchEnabled()) return
         if (e.button !== 0) return
         if (Math.abs(e.y - downY) > TAP_MOVE_THRESHOLD) dragging = true
     }
     select.onMouseUp = (e: MouseEvent) => {
+        debugLog("enableSelectTap.onMouseUp", e)
         if (!isTouchEnabled()) return
         if (e.button !== 0) return
         if (dragging) return
         if (Date.now() - downTime > TAP_MAX_MS) return
+        // Part of a swipe-stream (rapid drifting taps) — not a real tap.
+        const now = Date.now()
+        if (
+            lastTapTime > 0 &&
+            now - lastTapTime <= PAN_STREAM_MS &&
+            Math.abs(e.y - lastTapY) >= STREAM_MIN_DELTA
+        ) {
+            lastTapTime = now
+            lastTapY = e.y
+            return
+        }
+        lastTapTime = now
+        lastTapY = e.y
         const lp = (select as any).linesPerItem as number
         const so = (select as any).scrollOffset as number
         const sy = (select as any).screenY as number
